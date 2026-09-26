@@ -169,7 +169,7 @@ def cargar_libro_ventas(file_bytes, file_name):
 
     # Col P (15): Exentas | Col R (17): Base Imponible | Col T (19): Impuesto IVA | Col O (14): Total
     exento = df_raw.iloc[:, 15].apply(convertir_numero)
-    base = df_raw.iloc[:, 17].apply(convertir_numero)
+    base = df_raw.iloc[:, 22].apply(convertir_numero)
     iva = df_raw.iloc[:, 19].apply(convertir_numero)
     total = df_raw.iloc[:, 14].apply(convertir_numero)
 
