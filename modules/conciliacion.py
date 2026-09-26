@@ -1,11 +1,12 @@
 import io
-import pandas as pd
-import numpy as np
-import streamlit as st
 import re
+import numpy as np
+import pandas as pd
+import streamlit as st
 from utils.excel_exporter import generar_excel_resultado
 
 TIPOS_VALIDOS = ["FAC", "N/C", "N/D"]
+
 
 def normalizar_documento(valor):
     if pd.isna(valor):
@@ -17,6 +18,7 @@ def normalizar_documento(valor):
     if s.isdigit():
         s = s.lstrip("0") or "0"
     return s
+
 
 def convertir_numero(valor):
     if pd.isna(valor):
@@ -46,25 +48,68 @@ def convertir_numero(valor):
     except Exception:
         return 0.0
 
+
+def cargar_df_desde_bytes(file_bytes, file_name, skiprows=0):
+    """Detecta la extensión y procesa tanto archivos Excel como TXT."""
+    ext = file_name.split(".")[-1].lower()
+
+    if ext in ["xlsx", "xlsm", "xls"]:
+        xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
+        sheet_name = xls.sheet_names[0]
+        return pd.read_excel(
+            io.BytesIO(file_bytes),
+            sheet_name=sheet_name,
+            skiprows=skiprows,
+            engine="openpyxl",
+        )
+
+    elif ext == "txt":
+        for encoding in ["utf-8", "latin-1", "iso-8859-1", "cp1252"]:
+            try:
+                content = file_bytes.decode(encoding)
+                if "\t" in content:
+                    sep = "\t"
+                elif "|" in content:
+                    sep = "|"
+                elif ";" in content:
+                    sep = ";"
+                else:
+                    sep = ","
+
+                return pd.read_csv(io.StringIO(content), sep=sep, skiprows=skiprows)
+            except Exception:
+                continue
+        raise ValueError("No se pudo interpretar la codificación del archivo TXT.")
+
+
 @st.cache_data(show_spinner=False)
-def cargar_listado_facturacion(file_bytes, file_name, hoja="Documentos_CC"):
-    xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
-    hoja_uso = hoja if hoja in xls.sheet_names else xls.sheet_names[0]
-    df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=hoja_uso, engine="openpyxl")
+def cargar_listado_facturacion(file_bytes, file_name):
+    df_raw = cargar_df_desde_bytes(file_bytes, file_name, skiprows=0)
     df = pd.DataFrame()
 
     df["doc_num"] = df_raw.iloc[:, 0].apply(normalizar_documento)
-    df["tipo"] = df_raw.iloc[:, 1].astype(str).str.strip().str.upper().replace({
-        "FACTURA": "FAC", "FACT": "FAC", "F": "FAC",
-        "NC": "N/C", "NOTACREDITO": "N/C",
-        "ND": "N/D", "NOTADEBITO": "N/D"
-    })
+    df["tipo"] = (
+        df_raw.iloc[:, 1]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .replace(
+            {
+                "FACTURA": "FAC",
+                "FACT": "FAC",
+                "F": "FAC",
+                "NC": "N/C",
+                "NOTACREDITO": "N/C",
+                "ND": "N/D",
+                "NOTADEBITO": "N/D",
+            }
+        )
+    )
     df["clave"] = df["tipo"] + "|" + df["doc_num"]
     df["fecha_lista"] = pd.to_datetime(df_raw.iloc[:, 2], errors="coerce")
     df["codigo_cliente"] = df_raw.iloc[:, 5].fillna("").astype(str)
     df["cliente"] = df_raw.iloc[:, 6].fillna("").astype(str)
 
-    # Base Imponible tomada de Columna V (Subtotal-Descuento Bs.)
     base = df_raw.iloc[:, 21].apply(convertir_numero)
     iva = df_raw.iloc[:, 18].apply(convertir_numero)
     exento = df_raw.iloc[:, 19].apply(convertir_numero)
@@ -81,18 +126,26 @@ def cargar_listado_facturacion(file_bytes, file_name, hoja="Documentos_CC"):
 
     return df[(df["doc_num"] != "") & (df["tipo"].isin(TIPOS_VALIDOS))].copy()
 
+
 @st.cache_data(show_spinner=False)
 def cargar_libro_ventas(file_bytes, file_name):
-    xls = pd.ExcelFile(io.BytesIO(file_bytes), engine="openpyxl")
-    sheet_name = xls.sheet_names[0]
-    df_raw = pd.read_excel(io.BytesIO(file_bytes), sheet_name=sheet_name, skiprows=5, engine="openpyxl")
+    df_raw = cargar_df_desde_bytes(file_bytes, file_name, skiprows=5)
 
     col_fac = df_raw.iloc[:, 5].apply(normalizar_documento)
     col_nd = df_raw.iloc[:, 8].apply(normalizar_documento)
     col_nc = df_raw.iloc[:, 9].apply(normalizar_documento)
 
-    doc_num = col_fac.replace("", np.nan).combine_first(col_nd.replace("", np.nan)).combine_first(col_nc.replace("", np.nan)).fillna("")
-    tipo = np.where(col_nc != "", "N/C", np.where(col_nd != "", "N/D", np.where(col_fac != "", "FAC", "")))
+    doc_num = (
+        col_fac.replace("", np.nan)
+        .combine_first(col_nd.replace("", np.nan))
+        .combine_first(col_nc.replace("", np.nan))
+        .fillna("")
+    )
+    tipo = np.where(
+        col_nc != "",
+        "N/C",
+        np.where(col_nd != "", "N/D", np.where(col_fac != "", "FAC", "")),
+    )
 
     df = pd.DataFrame()
     df["doc_num"] = doc_num
@@ -110,7 +163,9 @@ def cargar_libro_ventas(file_bytes, file_name):
     iva = df_raw.iloc[:, 19].apply(convertir_numero)
     total = df_raw.iloc[:, 14].apply(convertir_numero)
 
-    es_retencion = (base == 0) & ((col_num_comprobante != "") | (col_iva_retenido > 0))
+    es_retencion = (base == 0) & (
+        (col_num_comprobante != "") | (col_iva_retenido > 0)
+    )
     df["es_retencion"] = es_retencion
     df["num_comprobante"] = col_num_comprobante
     df["iva_retenido"] = col_iva_retenido
@@ -127,40 +182,69 @@ def cargar_libro_ventas(file_bytes, file_name):
     df["iva_libro"] = iva
     df["exento_libro"] = exento
     df["total_libro"] = total
-    df["periodo"] = file_name.replace(".xlsx", "").replace(".xlsm", "")
+    df["periodo"] = file_name.replace(".xlsx", "").replace(".xlsm", "").replace(".txt", "")
 
     return df[(df["doc_num"] != "") & (df["tipo"].isin(TIPOS_VALIDOS))].copy()
+
 
 def conciliar_datos(df_lista, df_libros, tolerancia=0.50):
     df_libros_ventas = df_libros[~df_libros["es_retencion"]].copy()
     df_libros_retenciones = df_libros[df_libros["es_retencion"]].copy()
 
-    df_lista["dup_lista"] = df_lista.groupby("clave")["clave"].transform("count") > 1
-    df_libros_ventas["dup_libro"] = df_libros_ventas.groupby("clave")["clave"].transform("count") > 1
+    df_lista["dup_lista"] = (
+        df_lista.groupby("clave")["clave"].transform("count") > 1
+    )
+    df_libros_ventas["dup_libro"] = (
+        df_libros_ventas.groupby("clave")["clave"].transform("count") > 1
+    )
 
     lista_agg = df_lista.groupby("clave", as_index=False).agg(
-        tipo=("tipo", "first"), doc_num=("doc_num", "first"), fecha_lista=("fecha_lista", "min"),
-        codigo_cliente=("codigo_cliente", "first"), cliente=("cliente", "first"),
-        base_lista=("base_lista", "sum"), iva_lista=("iva_lista", "sum"),
-        exento_lista=("exento_lista", "sum"), total_lista=("total_lista", "sum"),
-        dup_lista=("dup_lista", "max"), ocurrencias_lista=("clave", "size")
+        tipo=("tipo", "first"),
+        doc_num=("doc_num", "first"),
+        fecha_lista=("fecha_lista", "min"),
+        codigo_cliente=("codigo_cliente", "first"),
+        cliente=("cliente", "first"),
+        base_lista=("base_lista", "sum"),
+        iva_lista=("iva_lista", "sum"),
+        exento_lista=("exento_lista", "sum"),
+        total_lista=("total_lista", "sum"),
+        dup_lista=("dup_lista", "max"),
+        ocurrencias_lista=("clave", "size"),
     )
 
     libro_agg = df_libros_ventas.groupby("clave", as_index=False).agg(
-        tipo=("tipo", "first"), doc_num=("doc_num", "first"), fecha_libro=("fecha_libro", "min"),
-        cliente_libro=("cliente_libro", "first"), base_libro=("base_libro", "sum"),
-        iva_libro=("iva_libro", "sum"), exento_libro=("exento_libro", "sum"),
-        total_libro=("total_libro", "sum"), dup_libro=("dup_libro", "max"),
-        periodo=("periodo", lambda x: " + ".join(sorted(set(str(v) for v in x if pd.notna(v))))),
-        ocurrencias_libro=("clave", "size")
+        tipo=("tipo", "first"),
+        doc_num=("doc_num", "first"),
+        fecha_libro=("fecha_libro", "min"),
+        cliente_libro=("cliente_libro", "first"),
+        base_libro=("base_libro", "sum"),
+        iva_libro=("iva_libro", "sum"),
+        exento_libro=("exento_libro", "sum"),
+        total_libro=("total_libro", "sum"),
+        dup_libro=("dup_libro", "max"),
+        periodo=(
+            "periodo",
+            lambda x: " + ".join(
+                sorted(set(str(v) for v in x if pd.notna(v)))
+            ),
+        ),
+        ocurrencias_libro=("clave", "size"),
     )
 
     ret_agg = df_libros_retenciones.groupby("clave", as_index=False).agg(
-        num_comprobante=("num_comprobante", lambda x: " + ".join(sorted(set(str(v) for v in x if pd.notna(v) and str(v) != "")))),
-        iva_retenido=("iva_retenido", "sum"), tiene_retencion=("es_retencion", "any")
+        num_comprobante=(
+            "num_comprobante",
+            lambda x: " + ".join(
+                sorted(set(str(v) for v in x if pd.notna(v) and str(v) != ""))
+            ),
+        ),
+        iva_retenido=("iva_retenido", "sum"),
+        tiene_retencion=("es_retencion", "any"),
     )
 
-    res = pd.merge(lista_agg, libro_agg, on="clave", how="outer", suffixes=("_lis", "_lib"))
+    res = pd.merge(
+        lista_agg, libro_agg, on="clave", how="outer", suffixes=("_lis", "_lib")
+    )
     res = pd.merge(res, ret_agg, on="clave", how="left")
 
     res["tipo"] = res["tipo_lis"].fillna(res["tipo_lib"])
@@ -168,7 +252,17 @@ def conciliar_datos(df_lista, df_libros, tolerancia=0.50):
     res["periodo"] = res["periodo"].fillna("No en libro")
     res["tiene_retencion"] = res["tiene_retencion"].fillna(False)
 
-    for col in ["base_lista", "iva_lista", "exento_lista", "total_lista", "base_libro", "iva_libro", "exento_libro", "total_libro", "iva_retenido"]:
+    for col in [
+        "base_lista",
+        "iva_lista",
+        "exento_lista",
+        "total_lista",
+        "base_libro",
+        "iva_libro",
+        "exento_libro",
+        "total_libro",
+        "iva_retenido",
+    ]:
         res[col] = res[col].fillna(0.0)
 
     res["diferencia_exento"] = (res["exento_libro"] - res["exento_lista"]).round(2)
@@ -184,21 +278,37 @@ def conciliar_datos(df_lista, df_libros, tolerancia=0.50):
     res.loc[~existe_lista & existe_libro, "estado"] = "SOLO EN LIBRO"
 
     ambos = existe_lista & existe_libro
-    res.loc[ambos & (res["diferencia_total"].abs() > tolerancia), "estado"] = "DIFERENCIA DE MONTO"
-    res.loc[ambos & (res["diferencia_total"].abs() <= tolerancia), "estado"] = "OK"
+    res.loc[ambos & (res["diferencia_total"].abs() > tolerancia), "estado"] = (
+        "DIFERENCIA DE MONTO"
+    )
+    res.loc[ambos & (res["diferencia_total"].abs() <= tolerancia), "estado"] = (
+        "OK"
+    )
 
     es_dup = res["dup_lista"].fillna(False) | res["dup_libro"].fillna(False)
     res.loc[es_dup, "estado"] = res.loc[es_dup, "estado"] + " / DUPLICADO"
 
     return res
 
+
 def modulo_conciliacion(sucursal):
     st.title(f"📊 Conciliación de Ventas - {sucursal}")
 
-    f_lista = st.file_uploader("1. Cargar Lista de Facturación (Excel)", type=["xlsx", "xlsm"], key=f"lista_{sucursal}")
-    f_libros = st.file_uploader("2. Cargar Libro(s) de Ventas (Excel)", type=["xlsx", "xlsm"], accept_multiple_files=True, key=f"libros_{sucursal}")
+    f_lista = st.file_uploader(
+        "1. Cargar Lista de Facturación (Excel o TXT)",
+        type=["xlsx", "xlsm", "txt"],
+        key=f"lista_{sucursal}",
+    )
+    f_libros = st.file_uploader(
+        "2. Cargar Libro(s) de Ventas (Excel o TXT)",
+        type=["xlsx", "xlsm", "txt"],
+        accept_multiple_files=True,
+        key=f"libros_{sucursal}",
+    )
 
-    tolerancia = st.sidebar.number_input("Tolerancia monetaria (Bs.)", min_value=0.0, value=0.50, step=0.01)
+    tolerancia = st.sidebar.number_input(
+        "Tolerancia monetaria (Bs.)", min_value=0.0, value=0.50, step=0.01
+    )
 
     if not f_lista or not f_libros:
         st.info("👋 Sube los archivos requeridos para iniciar la conciliación.")
@@ -207,27 +317,39 @@ def modulo_conciliacion(sucursal):
     if st.button("🚀 Ejecutar Conciliación", type="primary", use_container_width=True):
         with st.spinner("⏳ Procesando conciliación..."):
             df_lista = cargar_listado_facturacion(f_lista.getvalue(), f_lista.name)
-            dict_libros = {f.name: cargar_libro_ventas(f.getvalue(), f.name) for f in f_libros}
+            dict_libros = {
+                f.name: cargar_libro_ventas(f.getvalue(), f.name) for f in f_libros
+            }
             df_libros_todos = pd.concat(dict_libros.values(), ignore_index=True)
 
             res = conciliar_datos(df_lista, df_libros_todos, tolerancia)
 
         st.success("✅ Conciliación realizada.")
-        
-        # Muestra métricas
+
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total", len(res))
         m2.metric("OK", int(res["estado"].str.startswith("OK").sum()))
-        m3.metric("Faltan en Libro", int(res["estado"].str.startswith("FALTA EN LIBRO").sum()))
-        m4.metric("Solo en Libro", int(res["estado"].str.startswith("SOLO EN LIBRO").sum()))
-        m5.metric("Diferencias", int(res["estado"].str.startswith("DIFERENCIA DE MONTO").sum()))
+        m3.metric(
+            "Faltan en Libro",
+            int(res["estado"].str.startswith("FALTA EN LIBRO").sum()),
+        )
+        m4.metric(
+            "Solo en Libro",
+            int(res["estado"].str.startswith("SOLO EN LIBRO").sum()),
+        )
+        m5.metric(
+            "Diferencias",
+            int(res["estado"].str.startswith("DIFERENCIA DE MONTO").sum()),
+        )
 
         st.dataframe(res, use_container_width=True)
 
-        excel_bytes = generar_excel_resultado(res, df_lista, dict_libros, tolerancia)
+        excel_bytes = generar_excel_resultado(
+            res, df_lista, dict_libros, tolerancia
+        )
         st.download_button(
             "📥 Descargar Reporte en Excel",
             data=excel_bytes,
             file_name=f"Conciliacion_{sucursal}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
