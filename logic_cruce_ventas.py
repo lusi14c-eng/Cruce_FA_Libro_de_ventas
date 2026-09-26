@@ -91,8 +91,9 @@ def cargar_listado_facturacion(file_bytes, file_name, hoja="Documentos_CC"):
 
     df = pd.DataFrame()
 
+    # Mapeo por posición exacta según estructura del Listado de Facturación:
     # Col A (0): Número | Col B (1): Tipo | Col C (2): Fecha Doc | Col F (5): Cliente | Col G (6): Nombre
-    # Col Q (16): Base (Subtotal Bs) | Col S (18): IVA (Iva Bs) | Col T (19): Exento (Flete Bs)
+    # Col V (21): Base Imponible (Subtotal-Descuento Bs.) | Col S (18): IVA (Iva Bs) | Col T (19): Exento (Flete Bs)
     df["doc_num"] = df_raw.iloc[:, 0].apply(normalizar_documento)
     df["tipo"] = df_raw.iloc[:, 1].astype(str).str.strip().str.upper()
 
@@ -107,6 +108,7 @@ def cargar_listado_facturacion(file_bytes, file_name, hoja="Documentos_CC"):
     df["codigo_cliente"] = df_raw.iloc[:, 5].fillna("").astype(str)
     df["cliente"] = df_raw.iloc[:, 6].fillna("").astype(str)
 
+    # Base Imponible tomada de la Columna V (índice 21) -> Subtotal-Descuento Bs.
     base = df_raw.iloc[:, 21].apply(convertir_numero)
     iva = df_raw.iloc[:, 18].apply(convertir_numero)
     exento = df_raw.iloc[:, 19].apply(convertir_numero)
@@ -608,7 +610,7 @@ with st.expander("ℹ️ Mapeo de columnas configurado", expanded=False):
         """
         - **Lista de Facturación (`Documentos_CC`)**:
           - Documento: Columna **A** | Tipo: Columna **B**
-          - Base Imponible: Columna **Q** (`Subtotal Bs.`)
+          - Base Imponible: Columna **V** (`Subtotal-Descuento Bs.`)
           - Impuesto IVA: Columna **S** (`Iva Bs`)
           - Ventas Exentas: Columna **T** (`Flete Bs`)
         - **Libros de Ventas** (`skiprows=5`):
@@ -719,7 +721,7 @@ if btn_ejecutar or st.session_state.procesado:
         f_tipo = st.multiselect("Filtrar Tipo", TIPOS_VALIDOS, default=TIPOS_VALIDOS)
     with c2:
         estados_disp = sorted(res_conciliacion["estado"].dropna().unique().tolist())
-        f_estado = st.multiselect("Filtrar Estado", estados_disp, default=estados_disp)
+        f_estado = st.multiselect("Filtrar Estado", estados_disp, default误) if False else st.multiselect("Filtrar Estado", estados_disp, default=estados_disp)
     with c3:
         periodos_disp = sorted(res_conciliacion["periodo"].dropna().unique().tolist())
         f_periodo = st.multiselect("Filtrar Período / Libro", periodos_disp, default=periodos_disp)
