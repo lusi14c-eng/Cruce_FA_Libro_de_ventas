@@ -91,13 +91,11 @@ def cargar_listado_facturacion(file_bytes, file_name, hoja="Documentos_CC"):
 
     df = pd.DataFrame()
 
-    # Mapeo por posición exacta según estructura de Listado FA SILLACA
     # Col A (0): Número | Col B (1): Tipo | Col C (2): Fecha Doc | Col F (5): Cliente | Col G (6): Nombre
     # Col Q (16): Base (Subtotal Bs) | Col S (18): IVA (Iva Bs) | Col T (19): Exento (Flete Bs)
     df["doc_num"] = df_raw.iloc[:, 0].apply(normalizar_documento)
     df["tipo"] = df_raw.iloc[:, 1].astype(str).str.strip().str.upper()
 
-    # Normalizar denominaciones de tipo
     df["tipo"] = df["tipo"].replace({
         "FACTURA": "FAC", "FACT": "FAC", "F": "FAC",
         "NC": "N/C", "NOTACREDITO": "N/C",
@@ -145,14 +143,12 @@ def cargar_libro_ventas(file_bytes, file_name):
     col_nd = df_raw.iloc[:, 8].apply(normalizar_documento)
     col_nc = df_raw.iloc[:, 9].apply(normalizar_documento)
 
-    # Consolidar número de documento en una sola columna
     doc_num = col_fac.replace("", np.nan).combine_first(
         col_nd.replace("", np.nan)
     ).combine_first(
         col_nc.replace("", np.nan)
     ).fillna("")
 
-    # Determinar Tipo de Documento
     tipo = np.where(col_nc != "", "N/C",
            np.where(col_nd != "", "N/D",
            np.where(col_fac != "", "FAC", "")))
@@ -167,11 +163,22 @@ def cargar_libro_ventas(file_bytes, file_name):
     df["rif_libro"] = df_raw.iloc[:, 2].fillna("").astype(str)
     df["cliente_libro"] = df_raw.iloc[:, 3].fillna("").astype(str)
 
-    # Col P (15): Exentas | Col R (17): Base Imponible | Col T (19): Impuesto IVA | Col O (14): Total Ventas Con IVA
+    # Col N (13): Num Comprobante Retencion | Col AA (26): IVA Retenido por Comprador
+    col_num_comprobante = df_raw.iloc[:, 13].fillna("").astype(str).str.strip()
+    col_iva_retenido = df_raw.iloc[:, 26].apply(convertir_numero)
+
+    # Col P (15): Exentas | Col R (17): Base Imponible | Col T (19): Impuesto IVA | Col O (14): Total
     exento = df_raw.iloc[:, 15].apply(convertir_numero)
     base = df_raw.iloc[:, 17].apply(convertir_numero)
     iva = df_raw.iloc[:, 19].apply(convertir_numero)
     total = df_raw.iloc[:, 14].apply(convertir_numero)
+
+    # REGLA DE DETECCIÓN DE RETENCIONES DE IVA
+    es_retencion = (base == 0) & ((col_num_comprobante != "") | (col_iva_retenido > 0))
+
+    df["es_retencion"] = es_retencion
+    df["num_comprobante"] = col_num_comprobante
+    df["iva_retenido"] = col_iva_retenido
 
     total = np.where(total == 0, base + iva + exento, total)
 
@@ -196,11 +203,13 @@ def cargar_libro_ventas(file_bytes, file_name):
 # ============================================================
 
 def conciliar_datos(df_lista, df_libros, tolerancia=0.50):
-    # Detección de duplicados
-    df_lista["dup_lista"] = df_lista.groupby("clave")["clave"].transform("count") > 1
-    df_libros["dup_libro"] = df_libros.groupby("clave")["clave"].transform("count") > 1
+    # Separar retenciones puras para no sumarlas a la base imponible de la venta
+    df_libros_ventas = df_libros[~df_libros["es_retencion"]].copy()
+    df_libros_retenciones = df_libros[df_libros["es_retencion"]].copy()
 
-    # Agrupamiento por clave usando Named Aggregation
+    df_lista["dup_lista"] = df_lista.groupby("clave")["clave"].transform("count") > 1
+    df_libros_ventas["dup_libro"] = df_libros_ventas.groupby("clave")["clave"].transform("count") > 1
+
     lista_agg = df_lista.groupby("clave", as_index=False).agg(
         tipo=("tipo", "first"),
         doc_num=("doc_num", "first"),
@@ -215,7 +224,7 @@ def conciliar_datos(df_lista, df_libros, tolerancia=0.50):
         ocurrencias_lista=("clave", "size")
     )
 
-    libro_agg = df_libros.groupby("clave", as_index=False).agg(
+    libro_agg = df_libros_ventas.groupby("clave", as_index=False).agg(
         tipo=("tipo", "first"),
         doc_num=("doc_num", "first"),
         fecha_libro=("fecha_libro", "min"),
@@ -229,18 +238,25 @@ def conciliar_datos(df_lista, df_libros, tolerancia=0.50):
         ocurrencias_libro=("clave", "size")
     )
 
+    # Agrupar retenciones por clave para asociar información
+    ret_agg = df_libros_retenciones.groupby("clave", as_index=False).agg(
+        num_comprobante=("num_comprobante", lambda x: " + ".join(sorted(set(str(v) for v in x if pd.notna(v) and str(v) != "")))),
+        iva_retenido=("iva_retenido", "sum"),
+        tiene_retencion=("es_retencion", "any")
+    )
+
     res = pd.merge(lista_agg, libro_agg, on="clave", how="outer", suffixes=("_lis", "_lib"))
+    res = pd.merge(res, ret_agg, on="clave", how="left")
 
     res["tipo"] = res["tipo_lis"].fillna(res["tipo_lib"])
     res["documento"] = res["doc_num_lis"].fillna(res["doc_num_lib"])
     res["periodo"] = res["periodo"].fillna("No en libro")
+    res["tiene_retencion"] = res["tiene_retencion"].fillna(False)
 
-    # Reemplazar NaN por 0.0 en montos
     for col in ["base_lista", "iva_lista", "exento_lista", "total_lista",
-                "base_libro", "iva_libro", "exento_libro", "total_libro"]:
+                "base_libro", "iva_libro", "exento_libro", "total_libro", "iva_retenido"]:
         res[col] = res[col].fillna(0.0)
 
-    # Cálculo de diferencias
     res["diferencia_exento"] = (res["exento_libro"] - res["exento_lista"]).round(2)
     res["diferencia_base"] = (res["base_libro"] - res["base_lista"]).round(2)
     res["diferencia_iva"] = (res["iva_libro"] - res["iva_lista"]).round(2)
@@ -257,7 +273,7 @@ def conciliar_datos(df_lista, df_libros, tolerancia=0.50):
     res.loc[ambos & (res["diferencia_total"].abs() > tolerancia), "estado"] = "DIFERENCIA DE MONTO"
     res.loc[ambos & (res["diferencia_total"].abs() <= tolerancia), "estado"] = "OK"
 
-    # Marcar banderas de duplicado
+    # Marcar banderas
     es_dup = res["dup_lista"].fillna(False) | res["dup_libro"].fillna(False)
     res.loc[es_dup, "estado"] = res.loc[es_dup, "estado"] + " / DUPLICADO"
 
@@ -289,6 +305,7 @@ def seleccionar_columnas_auditoria(res):
         "tipo", "documento", "clave",
         "fecha_lista", "fecha_libro",
         "codigo_cliente", "cliente", "cliente_libro",
+        "num_comprobante", "iva_retenido",
         "exento_lista", "exento_libro", "diferencia_exento",
         "base_lista", "base_libro", "diferencia_base",
         "iva_lista", "iva_libro", "diferencia_iva",
@@ -424,7 +441,7 @@ def aplicar_estilo_excel(writer, nombre_hoja, color_encabezado="1F4E78"):
 
     ws.row_dimensions[1].height = 32
 
-    palabras_monto = ["base", "iva", "exento", "total", "diferencia", "monto"]
+    palabras_monto = ["base", "iva", "exento", "total", "diferencia", "monto", "retenido"]
     for col_idx in range(1, ws.max_column + 1):
         encabezado = str(ws.cell(1, col_idx).value or "").lower()
         if any(p in encabezado for p in palabras_monto):
@@ -601,6 +618,7 @@ with st.expander("ℹ️ Mapeo de columnas configurado", expanded=False):
           - Base Imponible: Columna **R**
           - Impuesto IVA: Columna **T**
           - Ventas Exentas: Columna **P**
+          - Retenciones de IVA: Columna **N** (N° Comprobante) y Columna **AA** (Monto Retenido)
         """
     )
 
@@ -647,10 +665,8 @@ if btn_ejecutar or st.session_state.procesado:
     st.session_state.procesado = True
 
     with st.spinner("⏳ Cargando y procesando los archivos... Por favor espera unos segundos."):
-        # Cargar Lista de Facturación
         df_lista = cargar_listado_facturacion(f_lista.getvalue(), f_lista.name)
 
-        # Cargar Libros de Ventas
         dict_libros = {}
         list_libros = []
         for f in f_libros:
@@ -660,7 +676,6 @@ if btn_ejecutar or st.session_state.procesado:
 
         df_libros_todos = pd.concat(list_libros, ignore_index=True)
 
-        # Ejecutar conciliación
         res_conciliacion = conciliar_datos(df_lista, df_libros_todos, tolerancia)
 
     # ============================================================
@@ -717,12 +732,14 @@ if btn_ejecutar or st.session_state.procesado:
 
     cols_ver = [
         "tipo", "documento", "fecha_lista", "fecha_libro", "cliente", "codigo_cliente",
+        "num_comprobante", "iva_retenido",
         "exento_lista", "exento_libro", "diferencia_exento",
         "base_lista", "base_libro", "diferencia_base",
         "iva_lista", "iva_libro", "diferencia_iva",
         "total_lista", "total_libro", "diferencia_total",
         "periodo", "estado"
     ]
+    cols_ver = [c for c in cols_ver if c in vista.columns]
 
     st.dataframe(
         formato_fecha(vista[cols_ver]),
