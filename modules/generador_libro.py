@@ -168,23 +168,22 @@ def preparar_auxiliar_fa(df):
         "subtipo": detectar_columna(df, ["Sub Tipo", "Subtipo", "SUB_TIPO"]),
         "factura_afectada": detectar_columna(df, ["Factura Afectada", "Doc Afectado", "Afectado", "FACTURA_AFECTADA","U_NUM_FAC_AFECTADA"]),
         "cliente": detectar_columna(df, ["Cliente", "Cod Cliente", "Código Cliente", "COD_CLI"]),
-        "nombre": detectar_columna(df, ["Nombre", "Razon Social", "Razón Social", "Cliente", "NOM_CLI", "NOMBRE_CLIENTE]),
+        "nombre": detectar_columna(df, ["Nombre", "Razon Social", "Razón Social", "Cliente", "NOM_CLI", "NOMBRE_CLIENTE"]),
         "asiento": detectar_columna(df, ["Asiento", "Nro Asiento"]),
         "modulo": detectar_columna(df, ["Modulo", "Módulo"]),
         "tipo_cambio": detectar_columna(df, ["Tipo Cambio", "Tasa", "Tasa Cambio"]),
         "costo_total_bs": detectar_columna(df, ["Costo Total Bs.", "Costo Total Bs", "Costo Total"]),
         "base_bs": detectar_columna(df, [
             "Base Imponible Bs.", "Base Imponible Bs", "Base Imponible", "Base Bs.", "Base Bs",
-            "Base Gravada", "Monto Base", "BASE_IMP", "M_BASE", "BASE_IMP_IVA_Bs.", "BASE_IMP_IVA_Bs"
+            "Base Gravada", "Monto Base", "BASE_IMP", "M_BASE", "BASE_IMP_IVA_Bs.", "BASE_IMP_IVA_Bs", "BASE_IMP_IVA Bs."
         ]),
-        "iva_bs": detectar_columna(df, ["Iva Bs.", "IVA Bs.", "Iva Bs", "IVA Bs", "Monto IVA", "IVA"]),
+        "iva_bs": detectar_columna(df, ["Iva Bs.", "IVA Bs.", "Iva Bs", "IVA Bs", "Monto IVA", "IVA", "IVA Bs."]),
         "flete_bs": detectar_columna(df, ["Flete Bs.", "Flete Bs", "Flete"]),
-        "monto_bs": detectar_columna(df, ["Monto Bs.", "Monto Bs", "Total Bs.", "Total Bs", "Total", "Monto Total"]),
-        "base_usd": detectar_columna(df, ["Base Imponible $", "Base Imponible USD", "Base $"]),
+        "monto_bs": detectar_columna(df, ["Monto Bs.", "Monto Bs", "Total Bs.", "Total Bs", "Total", "Monto Total", "MONTO Bs."]),
+        "base_usd": detectar_columna(df, ["Base Imponible $", "Base Imponible USD", "Base $", "BASE_IMP_IVA $"]),
         "iva_usd": detectar_columna(df, ["Iva $", "IVA $", "IVA USD"]),
         "monto_usd": detectar_columna(df, ["Monto $", "Monto USD", "Total $"]),
     }
-
     obligatorias = ["numero", "tipo", "fecha", "nombre", "base_bs", "iva_bs", "monto_bs"]
     faltantes = [campo for campo in obligatorias if mapa[campo] is None]
 
