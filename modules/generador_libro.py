@@ -158,24 +158,24 @@ def preparar_auxiliar_fa(df):
 
     mapa = {
         "numero": detectar_columna(df, [
-            "Numero", "Número", "Nro", "Nro.", "Num", "Num.", "Documento",
+            "Numero", "Número", "Nro", "Nro.", "Num", "Num.", "Documento", "DOCUMENTO", 
             "Nro Documento", "Nro. Documento", "Nro Doc", "Nro. Doc", "FACTURA", "DOC_NUM"
         ]),
         "tipo": detectar_columna(df, ["Tipo", "Tipo Doc", "Tipo Documento", "TIP_DOC", "TIPO_DOC"]),
         "fecha": detectar_columna(df, ["Fecha Doc", "Fecha", "Fecha Documento", "FEC_DOC", "FECHA_DOC"]),
-        "anulada": detectar_columna(df, ["ANULADA", "Anulada", "Anulado", "Status", "Estado"]),
+        "anulada": detectar_columna(df, ["ANULADA", "Anulada", "Anulado", "Status", "Estado", "ANULADO"]),
         "moneda": detectar_columna(df, ["moneda_factura", "Moneda", "MONEDA"]),
         "subtipo": detectar_columna(df, ["Sub Tipo", "Subtipo", "SUB_TIPO"]),
-        "factura_afectada": detectar_columna(df, ["Factura Afectada", "Doc Afectado", "Afectado", "FACTURA_AFECTADA"]),
+        "factura_afectada": detectar_columna(df, ["Factura Afectada", "Doc Afectado", "Afectado", "FACTURA_AFECTADA","U_NUM_FAC_AFECTADA"]),
         "cliente": detectar_columna(df, ["Cliente", "Cod Cliente", "Código Cliente", "COD_CLI"]),
-        "nombre": detectar_columna(df, ["Nombre", "Razon Social", "Razón Social", "Cliente", "NOM_CLI"]),
+        "nombre": detectar_columna(df, ["Nombre", "Razon Social", "Razón Social", "Cliente", "NOM_CLI", "NOMBRE_CLIENTE]),
         "asiento": detectar_columna(df, ["Asiento", "Nro Asiento"]),
         "modulo": detectar_columna(df, ["Modulo", "Módulo"]),
         "tipo_cambio": detectar_columna(df, ["Tipo Cambio", "Tasa", "Tasa Cambio"]),
         "costo_total_bs": detectar_columna(df, ["Costo Total Bs.", "Costo Total Bs", "Costo Total"]),
         "base_bs": detectar_columna(df, [
             "Base Imponible Bs.", "Base Imponible Bs", "Base Imponible", "Base Bs.", "Base Bs",
-            "Base Gravada", "Monto Base", "BASE_IMP", "M_BASE"
+            "Base Gravada", "Monto Base", "BASE_IMP", "M_BASE", "BASE_IMP_IVA_Bs.", "BASE_IMP_IVA_Bs"
         ]),
         "iva_bs": detectar_columna(df, ["Iva Bs.", "IVA Bs.", "Iva Bs", "IVA Bs", "Monto IVA", "IVA"]),
         "flete_bs": detectar_columna(df, ["Flete Bs.", "Flete Bs", "Flete"]),
