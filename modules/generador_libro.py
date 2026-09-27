@@ -148,8 +148,11 @@ def leer_auxiliar_fa(uploaded_file):
         raise ValueError("Formato de Auxiliar FA no soportado.")
 
     df = df.dropna(axis=1, how="all")
-    df.columns = [str(col).strip().strip('"') for col in df.columns]
-    df = df.apply(lambda col: col.str.strip('"') if col.dtype == "object" else col)
+    # Limpieza profunda de comillas dobles y simples en encabezados y celdas
+    df.columns = [str(col).strip().strip('"').strip("'") for col in df.columns]
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].astype(str).str.replace('"', '', regex=False).str.strip()
+
     return df
 
 
@@ -166,19 +169,20 @@ def preparar_auxiliar_fa(df):
         "anulada": detectar_columna(df, ["ANULADA", "Anulada", "Anulado", "Status", "Estado", "ANULADO"]),
         "moneda": detectar_columna(df, ["moneda_factura", "Moneda", "MONEDA"]),
         "subtipo": detectar_columna(df, ["Sub Tipo", "Subtipo", "SUB_TIPO"]),
-        "factura_afectada": detectar_columna(df, ["Factura Afectada", "Doc Afectado", "Afectado", "FACTURA_AFECTADA","U_NUM_FAC_AFECTADA"]),
-        "cliente": detectar_columna(df, ["Cliente", "Cod Cliente", "Código Cliente", "COD_CLI"]),
-        "nombre": detectar_columna(df, ["Nombre", "Razon Social", "Razón Social", "Cliente", "NOM_CLI", "NOMBRE_CLIENTE"]),
+        "factura_afectada": detectar_columna(df, ["Factura Afectada", "Doc Afectado", "Afectado", "FACTURA_AFECTADA", "U_NUM_FAC_AFECTADA"]),
+        "cliente": detectar_columna(df, ["RIF", "Nit", "NIT", "Cliente", "Cod Cliente", "Código Cliente", "COD_CLI"]),
+        "nombre": detectar_columna(df, ["NOMBRE_CLIENTE", "Nombre Cliente", "Nombre", "Razon Social", "Razón Social", "NOM_CLI"]),
         "asiento": detectar_columna(df, ["Asiento", "Nro Asiento"]),
         "modulo": detectar_columna(df, ["Modulo", "Módulo"]),
         "tipo_cambio": detectar_columna(df, ["Tipo Cambio", "Tasa", "Tasa Cambio"]),
         "costo_total_bs": detectar_columna(df, ["Costo Total Bs.", "Costo Total Bs", "Costo Total"]),
+        "subtotal_bs": detectar_columna(df, ["SUBTOTAL Bs.", "SUBTOTAL Bs", "Subtotal Bs.", "Subtotal Bs", "SUBTOTAL"]),
         "base_bs": detectar_columna(df, [
             "Base Imponible Bs.", "Base Imponible Bs", "Base Imponible", "Base Bs.", "Base Bs",
             "Base Gravada", "Monto Base", "BASE_IMP", "M_BASE", "BASE_IMP_IVA_Bs.", "BASE_IMP_IVA_Bs", "BASE_IMP_IVA Bs."
         ]),
         "iva_bs": detectar_columna(df, ["Iva Bs.", "IVA Bs.", "Iva Bs", "IVA Bs", "Monto IVA", "IVA", "IVA Bs."]),
-        "flete_bs": detectar_columna(df, ["Flete Bs.", "Flete Bs", "Flete"]),
+        "flete_bs": detectar_columna(df, ["FLETES Bs.", "FLETES Bs", "Flete Bs.", "Flete Bs", "Flete"]),
         "monto_bs": detectar_columna(df, ["Monto Bs.", "Monto Bs", "Total Bs.", "Total Bs", "Total", "Monto Total", "MONTO Bs."]),
         "base_usd": detectar_columna(df, ["Base Imponible $", "Base Imponible USD", "Base $", "BASE_IMP_IVA $"]),
         "iva_usd": detectar_columna(df, ["Iva $", "IVA $", "IVA USD"]),
@@ -204,6 +208,7 @@ def preparar_auxiliar_fa(df):
     salida["Modulo"] = df[mapa["modulo"]].astype(str) if mapa["modulo"] else ""
     salida["Tipo Cambio"] = df[mapa["tipo_cambio"]].apply(limpiar_numero) if mapa["tipo_cambio"] else 0
     salida["Costo Total Bs"] = df[mapa["costo_total_bs"]].apply(limpiar_numero) if mapa["costo_total_bs"] else 0
+    salida["Subtotal Bs"] = df[mapa["subtotal_bs"]].apply(limpiar_numero) if mapa["subtotal_bs"] else 0
     salida["Base Imponible Bs"] = df[mapa["base_bs"]].apply(limpiar_numero)
     salida["IVA Bs"] = df[mapa["iva_bs"]].apply(limpiar_numero)
     salida["Flete Bs"] = df[mapa["flete_bs"]].apply(limpiar_numero) if mapa["flete_bs"] else 0
@@ -240,7 +245,9 @@ def leer_mayor(uploaded_file):
         raise ValueError("Formato de mayor no soportado.")
 
     df = df.dropna(axis=1, how="all")
-    df.columns = [str(c).strip() for c in df.columns]
+    df.columns = [str(c).strip().strip('"').strip("'") for c in df.columns]
+    for col in df.select_dtypes(include=['object']).columns:
+        df[col] = df[col].astype(str).str.replace('"', '', regex=False).str.strip()
     return df
 
 
@@ -318,17 +325,31 @@ def resumir_mayor(mayor):
 
 def construir_libro(auxiliar, resumen_mayor=None):
     libro = auxiliar.copy()
-    libro["Ventas Exentas / Exoneradas / No Sujetas"] = np.where(libro["Base Imponible Bs"] == 0, libro["Monto Bs"], 0)
+
+    # Cálculo del Exento: SUBTOTAL Bs. - BASE_IMP_IVA Bs. + FLETES Bs.
+    libro["Ventas Exentas / Exoneradas / No Sujetas"] = libro["Subtotal Bs"] - libro["Base Imponible Bs"] + libro["Flete Bs"]
+    libro["Ventas Exentas / Exoneradas / No Sujetas"] = libro["Ventas Exentas / Exoneradas / No Sujetas"].round(2)
+
     libro["Base Gravada"] = libro["Base Imponible Bs"]
     libro["Debito Fiscal IVA"] = libro["IVA Bs"]
     libro["IVA Retenido"] = 0.0
 
     if resumen_mayor is not None:
-        ret = resumen_mayor[["Clave Documento", "NIT", "Retencion Contabilidad"]].copy()
-        ret = ret.groupby(["Clave Documento", "NIT"], dropna=False)["Retencion Contabilidad"].sum().reset_index()
-        libro = libro.merge(ret, on=["Clave Documento", "NIT"], how="left")
+        # Extraer RIF/NIT de la contabilidad si existe
+        rif_map = resumen_mayor[["Clave Documento", "NIT"]].drop_duplicates(subset=["Clave Documento"])
+        libro = libro.merge(rif_map, on="Clave Documento", how="left")
+        if "NIT" in libro.columns:
+            libro["Cliente"] = np.where(libro["NIT"].fillna("") != "", libro["NIT"], libro["Cliente"])
+            libro.drop(columns=["NIT"], inplace=True)
+
+        ret = resumen_mayor[["Clave Documento", "Retencion Contabilidad"]].copy()
+        ret = ret.groupby("Clave Documento", dropna=False)["Retencion Contabilidad"].sum().reset_index()
+        libro = libro.merge(ret, on="Clave Documento", how="left")
         libro["IVA Retenido"] = libro["Retencion Contabilidad"].fillna(0)
         libro.drop(columns=["Retencion Contabilidad"], inplace=True)
+
+    # Formatear fecha a YYYY-MM-DD sin tiempo
+    libro["Fecha"] = pd.to_datetime(libro["Fecha"]).dt.strftime('%Y-%m-%d')
 
     libro["N° Comprobante Retención"] = ""
     libro["Fecha Comprobante Retención"] = ""
