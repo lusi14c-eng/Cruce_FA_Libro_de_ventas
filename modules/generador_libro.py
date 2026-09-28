@@ -126,14 +126,17 @@ def separar_fuente(valor):
 
 def detectar_columna(df, candidatos):
     columnas_normalizadas = {normalizar_texto(col): col for col in df.columns}
+    
+    # 1. Búsqueda exacta primero
     for candidato in candidatos:
         candidato_norm = normalizar_texto(candidato)
         if candidato_norm in columnas_normalizadas:
             return columnas_normalizadas[candidato_norm]
 
-    for columna_norm, columna_real in columnas_normalizadas.items():
-        for candidato in candidatos:
-            candidato_norm = normalizar_texto(candidato)
+    # 2. Búsqueda por subcadena con coincidencia exacta de tipo de moneda ($ vs Bs)
+    for candidato in candidatos:
+        candidato_norm = normalizar_texto(candidato)
+        for columna_norm, columna_real in columnas_normalizadas.items():
             if candidato_norm in columna_norm:
                 return columna_real
     return None
@@ -184,18 +187,15 @@ def preparar_auxiliar_fa(df):
         "numero": detectar_columna(
             df,
             [
+                "DOCUMENTO",
                 "Numero",
                 "Número",
                 "Nro",
                 "Nro.",
                 "Num",
                 "Num.",
-                "Documento",
-                "DOCUMENTO",
                 "Nro Documento",
                 "Nro. Documento",
-                "Nro Doc",
-                "Nro. Doc",
                 "FACTURA",
                 "DOC_NUM",
             ],
@@ -222,20 +222,20 @@ def preparar_auxiliar_fa(df):
         "factura_afectada": detectar_columna(
             df,
             [
+                "U_NUM_FAC_AFECTADA",
                 "Factura Afectada",
                 "Doc Afectado",
                 "Afectado",
                 "FACTURA_AFECTADA",
-                "U_NUM_FAC_AFECTADA",
             ],
         ),
         "cliente": detectar_columna(
             df,
             [
+                "CLIENTE",
                 "RIF",
                 "Nit",
                 "NIT",
-                "Cliente",
                 "Cod Cliente",
                 "Código Cliente",
                 "COD_CLI",
@@ -255,7 +255,7 @@ def preparar_auxiliar_fa(df):
         "asiento": detectar_columna(df, ["Asiento", "Nro Asiento"]),
         "modulo": detectar_columna(df, ["Modulo", "Módulo"]),
         "tipo_cambio": detectar_columna(
-            df, ["Tipo Cambio", "Tasa", "Tasa Cambio"]
+            df, ["TIPO_CAMBIO_CLIENT", "Tipo Cambio", "Tasa", "Tasa Cambio"]
         ),
         "costo_total_bs": detectar_columna(
             df, ["Costo Total Bs.", "Costo Total Bs", "Costo Total"]
@@ -267,7 +267,7 @@ def preparar_auxiliar_fa(df):
                 "SUBTOTAL Bs",
                 "Subtotal Bs.",
                 "Subtotal Bs",
-                "SUBTOTAL",
+                "SUBTOTAL_BS",
             ],
         ),
         "descuento_bs": detectar_columna(
@@ -277,15 +277,17 @@ def preparar_auxiliar_fa(df):
                 "DESCUENTO Bs",
                 "Descuento Bs.",
                 "Descuento Bs",
-                "DESCUENTO",
+                "DESCUENTO_BS",
             ],
         ),
+        # Prioridad estricta a columnas en Bs. para evitar cruce con columnas en USD ($)
         "base_bs": detectar_columna(
             df,
             [
-                "BASE_IMP_IVA_Bs.",
-                "BASE_IMP_IVA_Bs",
                 "BASE_IMP_IVA Bs.",
+                "BASE_IMP_IVA_Bs.",
+                "BASE_IMP_IVA Bs",
+                "BASE_IMP_IVA_Bs",
                 "Base Imponible Bs.",
                 "Base Imponible Bs",
                 "Base Imponible",
@@ -300,16 +302,17 @@ def preparar_auxiliar_fa(df):
         "iva_bs": detectar_columna(
             df,
             [
-                "Iva Bs.",
                 "IVA Bs.",
-                "Iva Bs",
+                "IVA_Bs.",
+                "Iva Bs.",
                 "IVA Bs",
+                "Iva Bs",
                 "Monto IVA",
-                "IVA",
+                "IVA_BS",
             ],
         ),
         "flete_bs": detectar_columna(
-            df, ["FLETES Bs.", "FLETES Bs", "Flete Bs.", "Flete Bs", "Flete"]
+            df, ["FLETES Bs.", "FLETES Bs", "Flete Bs.", "Flete Bs", "FLETE_BS", "Flete"]
         ),
         "monto_bs": detectar_columna(
             df,
@@ -318,15 +321,14 @@ def preparar_auxiliar_fa(df):
                 "Monto Bs",
                 "Total Bs.",
                 "Total Bs",
-                "Total",
-                "Monto Total",
                 "MONTO Bs.",
+                "MONTO_BS",
             ],
         ),
         "base_usd": detectar_columna(
-            df, ["Base Imponible $", "Base Imponible USD", "Base $", "BASE_IMP_IVA $"]
+            df, ["BASE_IMP_IVA $", "BASE_IMP_IVA_$", "Base Imponible $", "Base Imponible USD", "Base $"]
         ),
-        "iva_usd": detectar_columna(df, ["Iva $", "IVA $", "IVA USD"]),
+        "iva_usd": detectar_columna(df, ["IVA $", "Iva $", "IVA USD"]),
         "monto_usd": detectar_columna(
             df, ["Monto $", "Monto USD", "Total $"]
         ),
@@ -338,7 +340,6 @@ def preparar_auxiliar_fa(df):
         "nombre",
         "base_bs",
         "iva_bs",
-        "monto_bs",
     ]
     faltantes = [campo for campo in obligatorias if mapa[campo] is None]
 
@@ -394,14 +395,18 @@ def preparar_auxiliar_fa(df):
         else 0
     )
 
-    # Base Imponible directa
+    # Base Imponible tomada de forma estricta en Bolívares
     salida["Base Imponible Bs"] = df[mapa["base_bs"]].apply(limpiar_numero)
-
     salida["IVA Bs"] = df[mapa["iva_bs"]].apply(limpiar_numero)
     salida["Flete Bs"] = (
         df[mapa["flete_bs"]].apply(limpiar_numero) if mapa["flete_bs"] else 0
     )
-    salida["Monto Bs"] = df[mapa["monto_bs"]].apply(limpiar_numero)
+
+    if mapa["monto_bs"]:
+        salida["Monto Bs"] = df[mapa["monto_bs"]].apply(limpiar_numero)
+    else:
+        salida["Monto Bs"] = salida["Base Imponible Bs"] + salida["IVA Bs"] + salida["Flete Bs"]
+
     salida["Base Imponible $"] = (
         df[mapa["base_usd"]].apply(limpiar_numero) if mapa["base_usd"] else 0
     )
@@ -635,15 +640,12 @@ def resumir_mayor(mayor):
 def construir_libro(auxiliar, resumen_mayor=None):
     libro = auxiliar.copy()
 
-    # Exento = Subtotal - Descuento - Base Gravada + Fletes
-    calculo_exento = (
-        libro["Subtotal Bs"]
-        - libro["Descuento Bs"]
-        - libro["Base Imponible Bs"]
-        + libro["Flete Bs"]
-    )
+    # Cálculo correcto de Exentos
+    subtotal_neto = libro["Subtotal Bs"] - libro["Descuento Bs"]
+    calculo_exento = subtotal_neto - libro["Base Imponible Bs"] + libro["Flete Bs"]
+
     libro["Ventas Exentas / Exoneradas / No Sujetas"] = np.where(
-        calculo_exento.abs() < 0.01, 0.0, calculo_exento
+        calculo_exento.abs() < 0.05, 0.0, calculo_exento
     ).round(2)
 
     libro["Base Gravada"] = libro["Base Imponible Bs"]
