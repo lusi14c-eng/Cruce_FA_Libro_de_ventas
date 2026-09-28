@@ -86,7 +86,15 @@ def tipo_documento(valor):
     texto = normalizar_texto(valor)
     if texto in ["FAC", "FACTURA", "FACT"]:
         return "FAC"
-    if texto in ["N/C", "NC", "NOTA DE CREDITO", "NOTA CREDITO"]:
+    if texto in [
+        "N/C",
+        "NC",
+        "NOTA DE CREDITO",
+        "NOTA CREDITO",
+        "DEV",
+        "DEV#",
+        "DEVOLUCION",
+    ]:
         return "N/C"
     if texto in ["N/D", "ND", "NOTA DE DEBITO", "NOTA DEBITO"]:
         return "N/D"
@@ -103,6 +111,8 @@ def separar_fuente(valor):
         r"^(N/D)#?(.*)$",
         r"^(NC)#?(.*)$",
         r"^(ND)#?(.*)$",
+        r"^(DEV)#?(.*)$",
+        r"^(DEVOLUCION)#?(.*)$",
     ]
     for patron in patrones:
         match = re.match(patron, texto)
@@ -713,6 +723,8 @@ def construir_conciliacion(libro, resumen):
     nit_mayor = resumen[
         [
             "Clave Documento",
+            "Tipo Documento",
+            "Numero Documento",
             "NIT",
             "Total Ingreso Contabilidad",
             "IVA Contabilidad",
@@ -721,6 +733,8 @@ def construir_conciliacion(libro, resumen):
     ].copy()
 
     nit_mayor = nit_mayor.groupby("Clave Documento", as_index=False).agg({
+        "Tipo Documento": "first",
+        "Numero Documento": "first",
         "NIT": "first",
         "Total Ingreso Contabilidad": "sum",
         "IVA Contabilidad": "sum",
@@ -728,8 +742,14 @@ def construir_conciliacion(libro, resumen):
     })
 
     conciliacion = libro_control.merge(
-        nit_mayor, on="Clave Documento", how="left"
+        nit_mayor, on="Clave Documento", how="outer", suffixes=("_libro", "_mayor")
     )
+    
+    # Consolidar metadatos tras el outer join
+    conciliacion["Tipo Documento"] = conciliacion["Tipo Documento_libro"].combine_first(conciliacion["Tipo Documento_mayor"])
+    conciliacion["Numero Documento"] = conciliacion["Numero Documento_libro"].combine_first(conciliacion["Numero Documento_mayor"])
+    conciliacion.drop(columns=["Tipo Documento_libro", "Tipo Documento_mayor", "Numero Documento_libro", "Numero Documento_mayor"], inplace=True)
+
     conciliacion["NIT"] = conciliacion["NIT"].fillna("")
 
     cols_eval = [
@@ -748,7 +768,7 @@ def construir_conciliacion(libro, resumen):
             conciliacion[col], errors="coerce"
         ).fillna(0.0)
 
-    # SUMA GLOBAL DE INGRESO LIBRO: Base Imponible + Exento
+    # SUMA GLOBAL DE INGRESO LIBRO
     conciliacion["Total Ingreso Libro"] = (
         conciliacion["Base Libro"] + conciliacion["Exento Libro"]
     )
@@ -761,9 +781,6 @@ def construir_conciliacion(libro, resumen):
 
     tolerancia = 0.05
 
-    # Evaluación de Cuadre:
-    # Si viene el detalle del pasivo de IVA (2.1.3.04.1.001), se valida Ingreso e IVA.
-    # Si NO viene la cuenta de IVA en el mayor, se valida únicamente el Ingreso Total.
     tiene_iva_conta = (conciliacion["IVA Contabilidad"].abs() > 0).any()
 
     if tiene_iva_conta:
@@ -781,306 +798,4 @@ def construir_conciliacion(libro, resumen):
 
     conciliacion["Estado"] = np.where(condicion_cuadre, "CUADRADO", "DIFERENCIA")
 
-    return conciliacion
-
-
-def generar_excel(
-    empresa,
-    fecha_inicio,
-    fecha_fin,
-    libro,
-    conciliacion,
-    auxiliar_anulados,
-    mayor,
-):
-    from openpyxl import load_workbook
-    from openpyxl.styles import Alignment, Border, Font, Side
-    from openpyxl.utils import get_column_letter
-
-    output = io.BytesIO()
-
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        columnas_libro = [
-            "N° Operación",
-            "Fecha",
-            "Tipo",
-            "Numero",
-            "Factura Afectada",
-            "Cliente",
-            "Nombre",
-            "Base Gravada",
-            "Ventas Exentas / Exoneradas / No Sujetas",
-            "Alicuota",
-            "Debito Fiscal IVA",
-            "IVA Retenido",
-            "N° Comprobante Retención",
-            "Fecha Comprobante Retención",
-            "Monto Bs",
-            "Observaciones",
-        ]
-        columnas_libro = [c for c in columnas_libro if c in libro.columns]
-        libro[columnas_libro].to_excel(
-            writer, sheet_name="LIBRO DE VENTAS", index=False, startrow=5
-        )
-
-        resumen = (
-            libro[
-                [
-                    "Base Gravada",
-                    "Ventas Exentas / Exoneradas / No Sujetas",
-                    "Debito Fiscal IVA",
-                    "IVA Retenido",
-                ]
-            ]
-            .sum()
-            .to_frame()
-            .T
-        )
-        resumen.insert(0, "Empresa", empresa)
-        resumen.insert(1, "Desde", fecha_inicio)
-        resumen.insert(2, "Hasta", fecha_fin)
-        resumen.to_excel(writer, sheet_name="RESUMEN IVA", index=False)
-
-        conciliacion.to_excel(writer, sheet_name="CONCILIACIÓN", index=False)
-        conciliacion[conciliacion["Estado"] == "DIFERENCIA"].to_excel(
-            writer, sheet_name="DIFERENCIAS", index=False
-        )
-        auxiliar_anulados.to_excel(writer, sheet_name="ANULADOS", index=False)
-
-        if mayor is not None:
-            mayor.to_excel(writer, sheet_name="DETALLE MAYOR", index=False)
-
-    output.seek(0)
-    wb = load_workbook(output)
-    thin = Side(style="thin")
-
-    for ws in wb.worksheets:
-        for row in ws.iter_rows():
-            for cell in row:
-                cell.alignment = Alignment(vertical="center")
-
-        ws.freeze_panes = "A7" if ws.title == "LIBRO DE VENTAS" else "A2"
-
-        for column_cells in ws.columns:
-            max_length = 0
-            column_letter = get_column_letter(column_cells[0].column)
-            for cell in column_cells:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except Exception:
-                    pass
-            ws.column_dimensions[column_letter].width = min(
-                max_length + 2, 35
-            )
-
-        header_row = 6 if ws.title == "LIBRO DE VENTAS" else 1
-        for cell in ws[header_row]:
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(
-                horizontal="center", vertical="center", wrap_text=True
-            )
-            cell.border = Border(bottom=thin)
-
-        for row in ws.iter_rows():
-            for cell in row:
-                if isinstance(cell.value, (int, float)):
-                    cell.number_format = "#,##0.00"
-
-    ws = wb["LIBRO DE VENTAS"]
-    ws["A1"] = "LIBRO DE VENTAS"
-    ws["A1"].font = Font(bold=True, size=16)
-    ws["A2"] = "Empresa"
-    ws["B2"] = empresa
-    ws["A3"] = "Período desde"
-    ws["B3"] = fecha_inicio
-    ws["C3"] = "Hasta"
-    ws["D3"] = fecha_fin
-    ws["A4"] = "Base legal de estructura: Artículo 76 Reglamento Ley IVA"
-    ws["A4"].font = Font(italic=True)
-
-    output_final = io.BytesIO()
-    wb.save(output_final)
-    output_final.seek(0)
-    return output_final
-
-
-# ============================================================
-# INTERFAZ DEL MÓDULO (LLAMADA DESDE MAIN.PY)
-# ============================================================
-
-
-def modulo_crear_libro(sucursal):
-    st.title(f"📘 Libro de Ventas SENIAT - {sucursal}")
-    st.caption("Auxiliar de FA + Mayor Analítico + Conciliación Contable")
-    st.divider()
-
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        empresa = st.text_input("Empresa", value=sucursal)
-    with col2:
-        fecha_inicio = st.date_input("Fecha inicial")
-    with col3:
-        fecha_fin = st.date_input("Fecha final")
-
-    with st.expander("⚙️ Configuración de cuentas contables", expanded=False):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.text_input(
-                "Cuenta de ingresos (General)", value=CUENTA_INGRESOS, disabled=True
-            )
-            st.text_input(
-                "Cuenta de Pasivo IVA",
-                value=CUENTA_BASE_GRAVADA,
-                disabled=True,
-            )
-        with c2:
-            st.text_input("Cuenta de Ingresos Exentos", value=CUENTA_EXENTO, disabled=True)
-            st.text_input(
-                "Cuenta IVA retenido",
-                value=CUENTA_RETENCION_IVA,
-                disabled=True,
-            )
-
-    st.subheader("📂 Archivos de entrada")
-    auxiliar_file = st.file_uploader(
-        "1. Auxiliar de FA (TXT, CSV, DAT, Excel)",
-        type=["txt", "csv", "xlsx", "xls", "dat"],
-        key=f"aux_{sucursal}",
-    )
-    mayor_files = st.file_uploader(
-        "2. Mayor Analítico - hasta 2 archivos (Opcional)",
-        type=["xlsx", "xls", "csv", "txt"],
-        accept_multiple_files=True,
-        key=f"may_{sucursal}",
-    )
-
-    if mayor_files and len(mayor_files) > 2:
-        st.error("Solo se permiten hasta 2 archivos de Mayor Analítico.")
-        mayor_files = mayor_files[:2]
-
-    st.divider()
-
-    if st.button(
-        "🚀 Generar Libro de Ventas y Conciliación",
-        type="primary",
-        use_container_width=True,
-    ):
-        if auxiliar_file is None:
-            st.error("Debe cargar el Auxiliar de FA.")
-            st.stop()
-
-        if fecha_inicio > fecha_fin:
-            st.error("La fecha inicial no puede ser mayor que la fecha final.")
-            st.stop()
-
-        try:
-            with st.spinner("Procesando Auxiliar de FA..."):
-                auxiliar_raw = leer_auxiliar_fa(auxiliar_file)
-                auxiliar = preparar_auxiliar_fa(auxiliar_raw)
-
-            auxiliar = auxiliar[
-                (auxiliar["Fecha"].dt.date >= fecha_inicio)
-                & (auxiliar["Fecha"].dt.date <= fecha_fin)
-            ].copy()
-
-            anulados = auxiliar[auxiliar["Estado"] == "ANULADA"].copy()
-            activos = auxiliar[auxiliar["Estado"] == "ACTIVA"].copy()
-
-            mayor_total = []
-            if mayor_files:
-                with st.spinner("Procesando Mayor Analítico..."):
-                    for archivo in mayor_files:
-                        mayor_raw = leer_mayor(archivo)
-                        mayor_preparado = preparar_mayor(mayor_raw)
-                        mayor_total.append(mayor_preparado)
-
-            if mayor_total:
-                mayor = pd.concat(mayor_total, ignore_index=True)
-                mayor = mayor[
-                    (mayor["Fecha"].dt.date >= fecha_inicio)
-                    & (mayor["Fecha"].dt.date <= fecha_fin)
-                ].copy()
-                resumen_mayor = resumir_mayor(mayor)
-            else:
-                mayor = None
-                resumen_mayor = None
-
-            with st.spinner("Construyendo Libro de Ventas..."):
-                libro = construir_libro(activos, resumen_mayor)
-
-            conciliacion = construir_conciliacion(libro, resumen_mayor)
-
-            st.success("Proceso terminado correctamente.")
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Documentos", len(libro))
-            m2.metric("Anulados", len(anulados))
-            m3.metric(
-                "Cuadrados",
-                (
-                    (conciliacion["Estado"] == "CUADRADO").sum()
-                    if len(conciliacion) > 0
-                    else 0
-                ),
-            )
-            m4.metric(
-                "Diferencias",
-                (
-                    (conciliacion["Estado"] == "DIFERENCIA").sum()
-                    if len(conciliacion) > 0
-                    else 0
-                ),
-            )
-
-            st.subheader("📘 Vista previa - Libro de Ventas")
-            cols_preview = [
-                "N° Operación",
-                "Fecha",
-                "Tipo",
-                "Numero",
-                "Factura Afectada",
-                "Cliente",
-                "Nombre",
-                "Base Gravada",
-                "Ventas Exentas / Exoneradas / No Sujetas",
-                "Alicuota",
-                "Debito Fiscal IVA",
-                "IVA Retenido",
-                "Monto Bs",
-            ]
-            cols_preview = [c for c in cols_preview if c in libro.columns]
-            st.dataframe(
-                libro[cols_preview],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            if resumen_mayor is not None:
-                st.subheader("🔎 Conciliación con Contabilidad")
-                st.dataframe(
-                    conciliacion, use_container_width=True, hide_index=True
-                )
-
-            with st.spinner("Generando Excel final..."):
-                archivo_excel = generar_excel(
-                    empresa=empresa,
-                    fecha_inicio=fecha_inicio,
-                    fecha_fin=fecha_fin,
-                    libro=libro,
-                    conciliacion=conciliacion,
-                    auxiliar_anulados=anulados,
-                    mayor=mayor,
-                )
-
-            st.download_button(
-                label="📥 Descargar Libro de Ventas en Excel",
-                data=archivo_excel,
-                file_name=f"Libro_Ventas_{empresa.replace(',', '').replace(' ', '_')}_{fecha_inicio}_{fecha_fin}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-
-        except Exception as e:
-            st.error("No fue posible procesar los archivos.")
-            st.exception(e)
+    return conciliacion[columnas]
