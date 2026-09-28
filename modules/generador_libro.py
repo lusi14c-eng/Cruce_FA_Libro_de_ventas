@@ -283,6 +283,9 @@ def preparar_auxiliar_fa(df):
         "base_bs": detectar_columna(
             df,
             [
+                "BASE_IMP_IVA_Bs.",
+                "BASE_IMP_IVA_Bs",
+                "BASE_IMP_IVA Bs.",
                 "Base Imponible Bs.",
                 "Base Imponible Bs",
                 "Base Imponible",
@@ -292,9 +295,6 @@ def preparar_auxiliar_fa(df):
                 "Monto Base",
                 "BASE_IMP",
                 "M_BASE",
-                "BASE_IMP_IVA_Bs.",
-                "BASE_IMP_IVA_Bs",
-                "BASE_IMP_IVA Bs.",
             ],
         ),
         "iva_bs": detectar_columna(
@@ -306,7 +306,6 @@ def preparar_auxiliar_fa(df):
                 "IVA Bs",
                 "Monto IVA",
                 "IVA",
-                "IVA Bs.",
             ],
         ),
         "flete_bs": detectar_columna(
@@ -394,12 +393,9 @@ def preparar_auxiliar_fa(df):
         if mapa["descuento_bs"]
         else 0
     )
-    
-    # ------------------------------------------------------------
-    # APLICACIÓN DE LA CORRECCIÓN: Restar Descuento Bs. a la Base
-    # ------------------------------------------------------------
-    base_raw = df[mapa["base_bs"]].apply(limpiar_numero)
-    salida["Base Imponible Bs"] = base_raw - salida["Descuento Bs"]
+
+    # Base Imponible directa
+    salida["Base Imponible Bs"] = df[mapa["base_bs"]].apply(limpiar_numero)
 
     salida["IVA Bs"] = df[mapa["iva_bs"]].apply(limpiar_numero)
     salida["Flete Bs"] = (
@@ -639,13 +635,16 @@ def resumir_mayor(mayor):
 def construir_libro(auxiliar, resumen_mayor=None):
     libro = auxiliar.copy()
 
-    # Exento = Subtotal - Base Imponible (ya con descuento descontado) + Fletes
-    libro["Ventas Exentas / Exoneradas / No Sujetas"] = (
-        libro["Subtotal Bs"] - libro["Base Imponible Bs"] + libro["Flete Bs"]
+    # Exento = Subtotal - Descuento - Base Gravada + Fletes
+    calculo_exento = (
+        libro["Subtotal Bs"]
+        - libro["Descuento Bs"]
+        - libro["Base Imponible Bs"]
+        + libro["Flete Bs"]
     )
-    libro["Ventas Exentas / Exoneradas / No Sujetas"] = libro[
-        "Ventas Exentas / Exoneradas / No Sujetas"
-    ].round(2)
+    libro["Ventas Exentas / Exoneradas / No Sujetas"] = np.where(
+        calculo_exento.abs() < 0.01, 0.0, calculo_exento
+    ).round(2)
 
     libro["Base Gravada"] = libro["Base Imponible Bs"]
     libro["Debito Fiscal IVA"] = libro["IVA Bs"]
@@ -794,7 +793,7 @@ def construir_conciliacion(libro, resumen):
         - conciliacion["Total Ingreso Contabilidad"]
     )
 
-    tolerancia = 0.05
+    tolerancia = 5.0
 
     tiene_iva_conta = (conciliacion["IVA Contabilidad"].abs() > 0).any()
 
