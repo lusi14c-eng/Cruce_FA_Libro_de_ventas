@@ -270,6 +270,16 @@ def preparar_auxiliar_fa(df):
                 "SUBTOTAL",
             ],
         ),
+        "descuento_bs": detectar_columna(
+            df,
+            [
+                "DESCUENTO Bs.",
+                "DESCUENTO Bs",
+                "Descuento Bs.",
+                "Descuento Bs",
+                "DESCUENTO",
+            ],
+        ),
         "base_bs": detectar_columna(
             df,
             [
@@ -379,7 +389,18 @@ def preparar_auxiliar_fa(df):
         if mapa["subtotal_bs"]
         else 0
     )
-    salida["Base Imponible Bs"] = df[mapa["base_bs"]].apply(limpiar_numero)
+    salida["Descuento Bs"] = (
+        df[mapa["descuento_bs"]].apply(limpiar_numero)
+        if mapa["descuento_bs"]
+        else 0
+    )
+    
+    # ------------------------------------------------------------
+    # APLICACIÓN DE LA CORRECCIÓN: Restar Descuento Bs. a la Base
+    # ------------------------------------------------------------
+    base_raw = df[mapa["base_bs"]].apply(limpiar_numero)
+    salida["Base Imponible Bs"] = base_raw - salida["Descuento Bs"]
+
     salida["IVA Bs"] = df[mapa["iva_bs"]].apply(limpiar_numero)
     salida["Flete Bs"] = (
         df[mapa["flete_bs"]].apply(limpiar_numero) if mapa["flete_bs"] else 0
@@ -400,6 +421,7 @@ def preparar_auxiliar_fa(df):
     cols_a_negativizar = [
         "Costo Total Bs",
         "Subtotal Bs",
+        "Descuento Bs",
         "Base Imponible Bs",
         "IVA Bs",
         "Flete Bs",
@@ -510,7 +532,6 @@ def preparar_mayor(df):
     salida["Crédito VES"] = df[col_credito].apply(limpiar_numero)
     salida["NIT"] = df[col_nit].apply(limpiar_rif)
 
-    # NETO DE INGRESO: Créditos menos Débitos
     salida["Movimiento VES"] = salida["Crédito VES"] - salida["Débito VES"]
 
     parsed = salida["Fuente"].apply(separar_fuente)
@@ -526,7 +547,6 @@ def preparar_mayor(df):
 
 
 def resumir_mayor(mayor):
-    # Cuentas de Ingreso: Todas las que empiecen por 4.1.1 + la cuenta exenta 7.1.3.45.1.997
     es_ingreso_total = (
         mayor["Cuenta Contable"].str.startswith(CUENTA_INGRESOS)
     ) | (mayor["Cuenta Contable"].astype(str) == CUENTA_EXENTO)
@@ -542,7 +562,6 @@ def resumir_mayor(mayor):
         .rename(columns={"Movimiento VES": "Total Ingreso Contabilidad"})
     )
 
-    # Pasivo IVA (2.1.3.04.1.001) - Opcional
     es_iva = mayor["Cuenta Contable"].astype(str) == CUENTA_BASE_GRAVADA
     iva = mayor[es_iva].copy()
     if not iva.empty:
@@ -566,7 +585,6 @@ def resumir_mayor(mayor):
             ]
         )
 
-    # Retenciones IVA (2.1.3.04.1.006) - Opcional
     es_retencion = mayor["Cuenta Contable"].astype(str) == CUENTA_RETENCION_IVA
     retenciones = mayor[es_retencion].copy()
     if not retenciones.empty:
@@ -621,7 +639,7 @@ def resumir_mayor(mayor):
 def construir_libro(auxiliar, resumen_mayor=None):
     libro = auxiliar.copy()
 
-    # Exento = Subtotal - Base Imponible + Fletes
+    # Exento = Subtotal - Base Imponible (ya con descuento descontado) + Fletes
     libro["Ventas Exentas / Exoneradas / No Sujetas"] = (
         libro["Subtotal Bs"] - libro["Base Imponible Bs"] + libro["Flete Bs"]
     )
@@ -767,12 +785,10 @@ def construir_conciliacion(libro, resumen):
             conciliacion[col], errors="coerce"
         ).fillna(0.0)
 
-    # SUMA GLOBAL DE INGRESO LIBRO: Base Imponible + Exento
     conciliacion["Total Ingreso Libro"] = (
         conciliacion["Base Libro"] + conciliacion["Exento Libro"]
     )
 
-    # DIFERENCIA DE INGRESO
     conciliacion["Diferencia Total Ingreso"] = (
         conciliacion["Total Ingreso Libro"]
         - conciliacion["Total Ingreso Contabilidad"]
