@@ -13,8 +13,8 @@ import streamlit as st
 # ============================================================
 CUENTA_INGRESOS = "4.1.1"
 CUENTA_EXENTO = "7.1.3.45.1.997"
-CUENTA_BASE_GRAVADA = "2.1.3.04.1.001"
-CUENTA_RETENCION_IVA = "2.1.3.04.1.006"
+CUENTA_BASE_GRAVADA = "2.1.3.04.1.001"  # Pasivo IVA (Opcional)
+CUENTA_RETENCION_IVA = "2.1.3.04.1.006"  # Retenciones IVA (Opcional)
 
 
 # ============================================================
@@ -158,7 +158,6 @@ def leer_auxiliar_fa(uploaded_file):
         raise ValueError("Formato de Auxiliar FA no soportado.")
 
     df = df.dropna(axis=1, how="all")
-    # Limpieza profunda de comillas dobles y simples en encabezados y celdas
     df.columns = [str(col).strip().strip('"').strip("'") for col in df.columns]
     for col in df.select_dtypes(include=["object"]).columns:
         df[col] = (
@@ -386,9 +385,7 @@ def preparar_auxiliar_fa(df):
         df[mapa["monto_usd"]].apply(limpiar_numero) if mapa["monto_usd"] else 0
     )
 
-    # ------------------------------------------------------------
-    # CORRECCIÓN: SIGNOS NEGATIVOS PARA DOCUMENTOS TIPO N/C
-    # ------------------------------------------------------------
+    # N/C Signo Negativo
     es_nc = salida["Tipo"] == "N/C"
     cols_a_negativizar = [
         "Costo Total Bs",
@@ -403,7 +400,6 @@ def preparar_auxiliar_fa(df):
     ]
 
     for col in cols_a_negativizar:
-        # Se forzado abs() para evitar doble signo negativo si ya venía negativo
         val_abs = salida[col].abs()
         salida[col] = np.where(es_nc, -val_abs, val_abs)
 
@@ -503,6 +499,8 @@ def preparar_mayor(df):
     salida["Débito VES"] = df[col_debito].apply(limpiar_numero)
     salida["Crédito VES"] = df[col_credito].apply(limpiar_numero)
     salida["NIT"] = df[col_nit].apply(limpiar_rif)
+
+    # NETO DE INGRESO: Créditos menos Débitos
     salida["Movimiento VES"] = salida["Crédito VES"] - salida["Débito VES"]
 
     parsed = salida["Fuente"].apply(separar_fuente)
@@ -518,68 +516,75 @@ def preparar_mayor(df):
 
 
 def resumir_mayor(mayor):
-    ingresos = mayor[
+    # Cuentas de Ingreso: Todas las que empiecen por 4.1.1 + la cuenta exenta 7.1.3.45.1.997
+    es_ingreso_total = (
         mayor["Cuenta Contable"].str.startswith(CUENTA_INGRESOS)
-    ].copy()
-    ingresos = (
+    ) | (mayor["Cuenta Contable"].astype(str) == CUENTA_EXENTO)
+
+    ingresos = mayor[es_ingreso_total].copy()
+    total_ingreso = (
         ingresos.groupby(
             ["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
             dropna=False,
         )["Movimiento VES"]
         .sum()
         .reset_index()
-        .rename(columns={"Movimiento VES": "Ingreso Contabilidad"})
+        .rename(columns={"Movimiento VES": "Total Ingreso Contabilidad"})
     )
 
-    base = mayor[
-        mayor["Cuenta Contable"].astype(str) == CUENTA_BASE_GRAVADA
-    ].copy()
-    base = (
-        base.groupby(
-            ["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
-            dropna=False,
-        )["Movimiento VES"]
-        .sum()
-        .reset_index()
-        .rename(columns={"Movimiento VES": "Base Contabilidad"})
-    )
+    # Pasivo IVA (2.1.3.04.1.001) - Opcional
+    es_iva = mayor["Cuenta Contable"].astype(str) == CUENTA_BASE_GRAVADA
+    iva = mayor[es_iva].copy()
+    if not iva.empty:
+        iva = (
+            iva.groupby(
+                ["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
+                dropna=False,
+            )["Movimiento VES"]
+            .sum()
+            .reset_index()
+            .rename(columns={"Movimiento VES": "IVA Contabilidad"})
+        )
+    else:
+        iva = pd.DataFrame(
+            columns=[
+                "Clave Documento",
+                "Tipo Documento",
+                "Numero Documento",
+                "NIT",
+                "IVA Contabilidad",
+            ]
+        )
 
-    exento = mayor[
-        mayor["Cuenta Contable"].astype(str) == CUENTA_EXENTO
-    ].copy()
-    exento = (
-        exento.groupby(
-            ["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
-            dropna=False,
-        )["Movimiento VES"]
-        .sum()
-        .reset_index()
-        .rename(columns={"Movimiento VES": "Exento Contabilidad"})
-    )
+    # Retenciones IVA (2.1.3.04.1.006) - Opcional
+    es_retencion = mayor["Cuenta Contable"].astype(str) == CUENTA_RETENCION_IVA
+    retenciones = mayor[es_retencion].copy()
+    if not retenciones.empty:
+        retenciones = (
+            retenciones.groupby(
+                ["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
+                dropna=False,
+            )["Movimiento VES"]
+            .sum()
+            .reset_index()
+            .rename(columns={"Movimiento VES": "Retencion Contabilidad Signo"})
+        )
+        retenciones["Retencion Contabilidad"] = retenciones[
+            "Retencion Contabilidad Signo"
+        ].abs()
+    else:
+        retenciones = pd.DataFrame(
+            columns=[
+                "Clave Documento",
+                "Tipo Documento",
+                "Numero Documento",
+                "NIT",
+                "Retencion Contabilidad",
+            ]
+        )
 
-    retenciones = mayor[
-        mayor["Cuenta Contable"].astype(str) == CUENTA_RETENCION_IVA
-    ].copy()
-    retenciones = (
-        retenciones.groupby(
-            ["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
-            dropna=False,
-        )["Movimiento VES"]
-        .sum()
-        .reset_index()
-        .rename(columns={"Movimiento VES": "Retencion Contabilidad Signo"})
-    )
-    retenciones["Retencion Contabilidad"] = retenciones[
-        "Retencion Contabilidad Signo"
-    ].abs()
-
-    resultado = ingresos.merge(
-        base,
-        on=["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
-        how="outer",
-    )
-    resultado = resultado.merge(
-        exento,
+    resultado = total_ingreso.merge(
+        iva,
         on=["Clave Documento", "Tipo Documento", "Numero Documento", "NIT"],
         how="outer",
     )
@@ -589,15 +594,16 @@ def resumir_mayor(mayor):
         how="outer",
     )
 
-    for columna in [
-        "Ingreso Contabilidad",
-        "Base Contabilidad",
-        "Exento Contabilidad",
-        "Retencion Contabilidad Signo",
+    cols_num = [
+        "Total Ingreso Contabilidad",
+        "IVA Contabilidad",
         "Retencion Contabilidad",
-    ]:
-        if columna in resultado.columns:
-            resultado[columna] = resultado[columna].fillna(0)
+    ]
+    for col in cols_num:
+        if col in resultado.columns:
+            resultado[col] = resultado[col].fillna(0.0)
+        else:
+            resultado[col] = 0.0
 
     return resultado
 
@@ -605,7 +611,7 @@ def resumir_mayor(mayor):
 def construir_libro(auxiliar, resumen_mayor=None):
     libro = auxiliar.copy()
 
-    # Cálculo del Exento: SUBTOTAL Bs. - BASE_IMP_IVA Bs. + FLETES Bs.
+    # Exento = Subtotal - Base Imponible + Fletes
     libro["Ventas Exentas / Exoneradas / No Sujetas"] = (
         libro["Subtotal Bs"] - libro["Base Imponible Bs"] + libro["Flete Bs"]
     )
@@ -618,7 +624,6 @@ def construir_libro(auxiliar, resumen_mayor=None):
     libro["IVA Retenido"] = 0.0
 
     if resumen_mayor is not None:
-        # Extraer RIF/NIT de la contabilidad si existe
         rif_map = resumen_mayor[["Clave Documento", "NIT"]].drop_duplicates(
             subset=["Clave Documento"]
         )
@@ -629,23 +634,23 @@ def construir_libro(auxiliar, resumen_mayor=None):
             )
             libro.drop(columns=["NIT"], inplace=True)
 
-        ret = resumen_mayor[
-            ["Clave Documento", "Retencion Contabilidad"]
-        ].copy()
-        ret = (
-            ret.groupby("Clave Documento", dropna=False)[
-                "Retencion Contabilidad"
-            ]
-            .sum()
-            .reset_index()
-        )
-        libro = libro.merge(ret, on="Clave Documento", how="left")
-        libro["IVA Retenido"] = libro["Retencion Contabilidad"].fillna(0)
-        libro.drop(columns=["Retencion Contabilidad"], inplace=True)
+        if "Retencion Contabilidad" in resumen_mayor.columns:
+            ret = resumen_mayor[
+                ["Clave Documento", "Retencion Contabilidad"]
+            ].copy()
+            ret = (
+                ret.groupby("Clave Documento", dropna=False)[
+                    "Retencion Contabilidad"
+                ]
+                .sum()
+                .reset_index()
+            )
+            libro = libro.merge(ret, on="Clave Documento", how="left")
+            libro["IVA Retenido"] = libro["Retencion Contabilidad"].fillna(0)
+            if "Retencion Contabilidad" in libro.columns:
+                libro.drop(columns=["Retencion Contabilidad"], inplace=True)
 
-    # Formatear fecha a YYYY-MM-DD sin tiempo
     libro["Fecha"] = pd.to_datetime(libro["Fecha"]).dt.strftime("%Y-%m-%d")
-
     libro["N° Comprobante Retención"] = ""
     libro["Fecha Comprobante Retención"] = ""
     libro["Observaciones"] = ""
@@ -667,19 +672,18 @@ def construir_conciliacion(libro, resumen):
         "Numero Documento",
         "NIT",
         "Base Libro",
-        "Base Contabilidad",
-        "Diferencia Base",
         "Exento Libro",
-        "Exento Contabilidad",
-        "Diferencia Exento",
+        "Total Ingreso Libro",
+        "Total Ingreso Contabilidad",
+        "Diferencia Total Ingreso",
         "IVA Libro",
+        "IVA Contabilidad",
         "Retencion Libro",
         "Retencion Contabilidad",
-        "Diferencia Retencion",
         "Estado",
     ]
 
-    if resumen is None:
+    if resumen is None or resumen.empty:
         return pd.DataFrame(columns=columnas)
 
     libro_control = libro[
@@ -710,57 +714,72 @@ def construir_conciliacion(libro, resumen):
         [
             "Clave Documento",
             "NIT",
-            "Base Contabilidad",
-            "Exento Contabilidad",
+            "Total Ingreso Contabilidad",
+            "IVA Contabilidad",
             "Retencion Contabilidad",
         ]
     ].copy()
+
     nit_mayor = nit_mayor.groupby("Clave Documento", as_index=False).agg({
         "NIT": "first",
-        "Base Contabilidad": "sum",
-        "Exento Contabilidad": "sum",
+        "Total Ingreso Contabilidad": "sum",
+        "IVA Contabilidad": "sum",
         "Retencion Contabilidad": "sum",
     })
 
     conciliacion = libro_control.merge(
-        nit_mayor, on="Clave Documento", how="outer", suffixes=("_Libro", "_Cont")
+        nit_mayor, on="Clave Documento", how="left"
     )
     conciliacion["NIT"] = conciliacion["NIT"].fillna("")
 
-    for col in [
+    cols_eval = [
         "Base Libro",
-        "Base Contabilidad",
         "Exento Libro",
-        "Exento Contabilidad",
+        "Total Ingreso Contabilidad",
         "IVA Libro",
+        "IVA Contabilidad",
         "Retencion Libro",
         "Retencion Contabilidad",
-    ]:
+    ]
+    for col in cols_eval:
         if col not in conciliacion.columns:
             conciliacion[col] = 0.0
         conciliacion[col] = pd.to_numeric(
             conciliacion[col], errors="coerce"
-        ).fillna(0)
+        ).fillna(0.0)
 
-    conciliacion["Diferencia Base"] = (
-        conciliacion["Base Libro"] - conciliacion["Base Contabilidad"]
+    # SUMA GLOBAL DE INGRESO LIBRO: Base Imponible + Exento
+    conciliacion["Total Ingreso Libro"] = (
+        conciliacion["Base Libro"] + conciliacion["Exento Libro"]
     )
-    conciliacion["Diferencia Exento"] = (
-        conciliacion["Exento Libro"] - conciliacion["Exento Contabilidad"]
-    )
-    conciliacion["Diferencia Retencion"] = (
-        conciliacion["Retencion Libro"]
-        - conciliacion["Retencion Contabilidad"]
+
+    # DIFERENCIA DE INGRESO
+    conciliacion["Diferencia Total Ingreso"] = (
+        conciliacion["Total Ingreso Libro"]
+        - conciliacion["Total Ingreso Contabilidad"]
     )
 
     tolerancia = 0.05
-    conciliacion["Estado"] = np.where(
-        (conciliacion["Diferencia Base"].abs() <= tolerancia)
-        & (conciliacion["Diferencia Exento"].abs() <= tolerancia)
-        & (conciliacion["Diferencia Retencion"].abs() <= tolerancia),
-        "CUADRADO",
-        "DIFERENCIA",
-    )
+
+    # Evaluación de Cuadre:
+    # Si viene el detalle del pasivo de IVA (2.1.3.04.1.001), se valida Ingreso e IVA.
+    # Si NO viene la cuenta de IVA en el mayor, se valida únicamente el Ingreso Total.
+    tiene_iva_conta = (conciliacion["IVA Contabilidad"].abs() > 0).any()
+
+    if tiene_iva_conta:
+        condicion_cuadre = (
+            (conciliacion["Diferencia Total Ingreso"].abs() <= tolerancia)
+            & (
+                (conciliacion["IVA Libro"] - conciliacion["IVA Contabilidad"]).abs()
+                <= tolerancia
+            )
+        )
+    else:
+        condicion_cuadre = (
+            conciliacion["Diferencia Total Ingreso"].abs() <= tolerancia
+        )
+
+    conciliacion["Estado"] = np.where(condicion_cuadre, "CUADRADO", "DIFERENCIA")
 
     return conciliacion
 
@@ -908,15 +927,15 @@ def modulo_crear_libro(sucursal):
         c1, c2 = st.columns(2)
         with c1:
             st.text_input(
-                "Cuenta de ingresos", value=CUENTA_INGRESOS, disabled=True
+                "Cuenta de ingresos (General)", value=CUENTA_INGRESOS, disabled=True
             )
             st.text_input(
-                "Cuenta de base gravada",
+                "Cuenta de Pasivo IVA",
                 value=CUENTA_BASE_GRAVADA,
                 disabled=True,
             )
         with c2:
-            st.text_input("Cuenta exenta", value=CUENTA_EXENTO, disabled=True)
+            st.text_input("Cuenta de Ingresos Exentos", value=CUENTA_EXENTO, disabled=True)
             st.text_input(
                 "Cuenta IVA retenido",
                 value=CUENTA_RETENCION_IVA,
