@@ -22,7 +22,8 @@ modulo = st.sidebar.radio(
     "Selecciona el Módulo:",
     [
         "📊 Conciliación de Ventas",
-        "📝 Crear Libro de Ventas SENIAT"
+        "📝 Crear Libro de Ventas SENIAT",
+        "📊 Analizador de Variaciones de Gastos"
     ]
 )
 
