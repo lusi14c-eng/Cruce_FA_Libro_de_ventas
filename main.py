@@ -1,6 +1,8 @@
 import streamlit as st
 from modules.conciliacion import modulo_conciliacion
 from modules.generador_libro import modulo_crear_libro
+# Importamos la función desde tu archivo logic_analizador_variaciones_gastos.py
+from modules.logic_analizador_variaciones_gastos import logic_analizador_variaciones_gastos.py
 
 st.set_page_config(
     page_title="Sistema de Conciliación y Libros de Ventas",
@@ -36,4 +38,4 @@ if modulo == "📊 Conciliación de Ventas":
 elif modulo == "📝 Crear Libro de Ventas SENIAT":
     modulo_crear_libro(sucursal)
 elif modulo == "📊 Analizador de Variaciones de Gastos":
-    modulo_crear_libro(sucursal)
+    modulo_analizador_gastos(sucursal)  # Llamada a la función correspondiente
