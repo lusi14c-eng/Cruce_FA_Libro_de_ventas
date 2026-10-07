@@ -8,20 +8,6 @@ import pandas as pd
 import streamlit as st
 
 
-st.set_page_config(
-    page_title="Laboratorio de Variaciones de Gastos",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-st.title("📊 Laboratorio de Variaciones de Gastos")
-st.caption(
-    "Análisis mensual por pestaña, segmento, cuenta y transacción histórica. "
-    "El archivo de gastos se analiza junto con la hoja Detalle."
-)
-
-
 # ============================================================
 # NORMALIZACIÓN / PARSING
 # ============================================================
@@ -230,8 +216,6 @@ def parse_gasto_sheet(raw, sheet_name):
             values[month] = 0.0 if pd.isna(n) else n
 
         if not label or all(abs(v) < 1e-12 for v in values.values()):
-            # Se conserva una cuenta con ceros solo si parece una cuenta real;
-            # filas totalmente vacías no se incorporan.
             if not is_account_line(label):
                 continue
 
@@ -628,7 +612,6 @@ def detail_matches_alert(alert, detail):
     if n2_match.any():
         return subset[n2_match].copy()
 
-    # Último respaldo: buscar el segmento en las clasificaciones de la fila.
     candidates = pd.Series(False, index=subset.index)
     for col in ["_N2", "_N2 2.0", "_CONCATENADO", "_nombre"]:
         if col in subset.columns:
@@ -679,541 +662,522 @@ def fmt(df, cols):
 
 
 # ============================================================
-# CARGA
+# FUNCIÓN PRINCIPAL DEL MÓDULO EXPORTABLE
 # ============================================================
-uploaded = st.file_uploader(
-    "📂 Cargar el Excel de Gastos Operativos",
-    type=["xlsx", "xls"],
-)
+def modulo_analizador_gastos(sucursal: str):
+    st.title("📊 Laboratorio de Variaciones de Gastos")
+    st.caption(
+        f"📍 Operando en: **{sucursal}** | "
+        "Análisis mensual por pestaña, segmento, cuenta y transacción histórica. "
+        "El archivo de gastos se analiza junto con la hoja Detalle."
+    )
 
-if uploaded is None:
-    st.info("Carga el archivo **Gastos Operativos Mayoreo VE** para comenzar.")
-    with st.expander("Estructura del archivo que espera esta versión"):
-        st.markdown(
-            """
-            Esta versión está ajustada al archivo entregado: las pestañas de gastos
-            tienen una fila con **Etiquetas de fila** y meses como `2026-09`,
-            `2026-08`, `2026-07`; la columna A contiene segmentos y, en las
-            pestañas `*_Categoria_Logist`, aparecen cuentas detalladas como
-            `7.1.1.01.1.001-Nómina` debajo de segmentos.
+    uploaded = st.file_uploader(
+        "📂 Cargar el Excel de Gastos Operativos",
+        type=["xlsx", "xls"],
+    )
 
-            La hoja **Detalle** utiliza `Empresa`, `Periodo`, `N2`, `Cuenta_Nombre`,
-            `REFERENCIA`, `Asiento`, `CENTRO_COSTO`, `USD`, `VES`, `USD_S1`,
-            `DEPARTAMENTO`, `CONCATENADO`, `N2 2.0` y `nombre` para llegar desde
-            una alerta hasta las transacciones que la explican.
-            """
-        )
-    st.stop()
+    if uploaded is None:
+        st.info("Carga el archivo **Gastos Operativos Mayoreo VE** para comenzar.")
+        with st.expander("Estructura del archivo que espera esta versión"):
+            st.markdown(
+                """
+                Esta versión está ajustada al archivo entregado: las pestañas de gastos
+                tienen una fila con **Etiquetas de fila** y meses como `2026-09`,
+                `2026-08`, `2026-07`; la columna A contiene segmentos y, en las
+                pestañas `*_Categoria_Logist`, aparecen cuentas detalladas como
+                `7.1.1.01.1.001-Nómina` debajo de segmentos.
 
-file_bytes = uploaded.getvalue()
-
-with st.spinner("Leyendo y estructurando el archivo..."):
-    try:
-        raw_sheets, sheet_names = read_workbook(file_bytes)
-        gastos, detail, diagnostics, detail_status = build_analysis(file_bytes)
-    except Exception as exc:
-        st.error(f"No fue posible procesar el archivo: {exc}")
+                La hoja **Detalle** utiliza `Empresa`, `Periodo`, `N2`, `Cuenta_Nombre`,
+                `REFERENCIA`, `Asiento`, `CENTRO_COSTO`, `USD`, `VES`, `USD_S1`,
+                `DEPARTAMENTO`, `CONCATENADO`, `N2 2.0` y `nombre` para llegar desde
+                una alerta hasta las transacciones que la explican.
+                """
+            )
         st.stop()
 
+    file_bytes = uploaded.getvalue()
 
-# ============================================================
-# PARÁMETROS
-# ============================================================
-st.sidebar.header("⚙️ Parámetros")
+    with st.spinner("Leyendo y estructurando el archivo..."):
+        try:
+            raw_sheets, sheet_names = read_workbook(file_bytes)
+            gastos, detail, diagnostics, detail_status = build_analysis(file_bytes)
+        except Exception as exc:
+            st.error(f"No fue posible procesar el archivo: {exc}")
+            st.stop()
 
-pct_threshold = st.sidebar.number_input(
-    "Variación % para alertar",
-    min_value=1.0,
-    max_value=500.0,
-    value=30.0,
-    step=5.0,
-)
-amount_threshold = st.sidebar.number_input(
-    "Variación mínima (moneda de la pestaña)",
-    min_value=0.0,
-    value=10000.0,
-    step=5000.0,
-)
-z_threshold = st.sidebar.number_input(
-    "Z-score atípico",
-    min_value=1.0,
-    max_value=8.0,
-    value=2.0,
-    step=0.5,
-)
-exclude_nonexpense = st.sidebar.checkbox(
-    "Excluir Ingresos y Merma",
-    value=False,
-)
+    # Parámetros en barra lateral
+    st.sidebar.header("⚙️ Parámetros del Analizador")
 
-variations = calculate_variations(gastos)
-
-if exclude_nonexpense and not variations.empty:
-    keep = ~variations["cuenta"].map(norm).str.contains(
-        r"ingresos|merma", regex=True, na=False
+    pct_threshold = st.sidebar.number_input(
+        "Variación % para alertar",
+        min_value=1.0,
+        max_value=500.0,
+        value=30.0,
+        step=5.0,
     )
-    variations = variations[keep].copy()
-
-variations = add_alert_classification(
-    variations,
-    pct_threshold,
-    amount_threshold,
-    z_threshold,
-)
-
-
-# ============================================================
-# FILTROS
-# ============================================================
-st.sidebar.divider()
-st.sidebar.header("🔎 Filtros")
-
-analysis_sheets = sorted(gastos["pestana"].unique()) if not gastos.empty else []
-selected_sheets = st.sidebar.multiselect(
-    "Pestañas",
-    analysis_sheets,
-    default=analysis_sheets,
-)
-
-available_months = (
-    sorted(gastos.loc[gastos["pestana"].isin(selected_sheets), "mes"].dropna().unique())
-    if not gastos.empty else []
-)
-
-if available_months:
-    min_date = pd.Timestamp(min(available_months))
-    max_date = pd.Timestamp(max(available_months))
-    date_range = st.sidebar.date_input(
-        "Período",
-        value=(min_date.date(), max_date.date()),
+    amount_threshold = st.sidebar.number_input(
+        "Variación mínima (moneda de la pestaña)",
+        min_value=0.0,
+        value=10000.0,
+        step=5000.0,
     )
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date = pd.Timestamp(date_range[0]).to_period("M").to_timestamp()
-        end_date = pd.Timestamp(date_range[1]).to_period("M").to_timestamp()
-    else:
-        start_date = min_date
-        end_date = pd.Timestamp(date_range).to_period("M").to_timestamp()
-else:
-    start_date = pd.Timestamp("1900-01-01")
-    end_date = pd.Timestamp("2100-01-01")
+    z_threshold = st.sidebar.number_input(
+        "Z-score atípico",
+        min_value=1.0,
+        max_value=8.0,
+        value=2.0,
+        step=0.5,
+    )
+    exclude_nonexpense = st.sidebar.checkbox(
+        "Excluir Ingresos y Merma",
+        value=False,
+    )
 
-filtered = (
-    variations[
-        variations["pestana"].isin(selected_sheets)
-        & variations["mes"].between(start_date, end_date)
-    ].copy()
-    if not variations.empty else pd.DataFrame()
-)
+    variations = calculate_variations(gastos)
 
-
-# ============================================================
-# PESTAÑAS DE LA APP
-# ============================================================
-tab_dashboard, tab_pestanas, tab_ranking, tab_detalle, tab_diag = st.tabs(
-    [
-        "🏠 Dashboard",
-        "📑 Pestañas",
-        "🚨 Ranking de variaciones",
-        "🔍 Detalle / causas",
-        "🛠 Diagnóstico",
-    ]
-)
-
-
-# ============================================================
-# DASHBOARD
-# ============================================================
-with tab_dashboard:
-    st.subheader("Resumen ejecutivo")
-
-    if filtered.empty:
-        st.warning("No hay datos en el período o filtros seleccionados.")
-    else:
-        latest_month = filtered["mes"].max()
-        latest = filtered[filtered["mes"] == latest_month].copy()
-
-        critical = (latest["nivel_alerta"] == "🔴 CRÍTICA").sum()
-        important = (latest["nivel_alerta"] == "🟠 IMPORTANTE").sum()
-        total_latest = latest["monto"].sum()
-        total_delta = latest["variacion_bs"].sum()
-
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Último mes", latest_month.strftime("%Y-%m"))
-        c2.metric("Gasto analizado", f"{total_latest:,.2f}")
-        c3.metric("Variación neta", f"{total_delta:,.2f}")
-        c4.metric("Alertas críticas", f"{critical:,}")
-        c5.metric("Alertas importantes", f"{important:,}")
-
-        st.markdown("### 🔥 Top 20 variaciones que merecen revisión")
-        top20 = latest.sort_values("impacto_abs", ascending=False).head(20).copy()
-        dashboard_cols = [
-            "nivel_alerta", "pestana", "empresa", "vista", "segmento",
-            "cuenta", "mes", "monto", "mes_anterior", "variacion_bs",
-            "variacion_pct", "peso_en_total_pct",
-            "participacion_variacion_pct", "direccion",
-        ]
-        dashboard_cols = [c for c in dashboard_cols if c in top20.columns]
-        st.dataframe(
-            fmt(
-                top20[dashboard_cols],
-                [
-                    "monto", "mes_anterior", "variacion_bs", "variacion_pct",
-                    "peso_en_total_pct", "participacion_variacion_pct",
-                ],
-            ),
-            use_container_width=True,
-            height=560,
+    if exclude_nonexpense and not variations.empty:
+        keep = ~variations["cuenta"].map(norm).str.contains(
+            r"ingresos|merma", regex=True, na=False
         )
+        variations = variations[keep].copy()
 
-        st.markdown("### 📈 Evolución del gasto total")
-        monthly = (
-            filtered.groupby("mes", as_index=False)["monto"]
-            .sum()
-            .sort_values("mes")
+    variations = add_alert_classification(
+        variations,
+        pct_threshold,
+        amount_threshold,
+        z_threshold,
+    )
+
+    # Filtros
+    st.sidebar.divider()
+    st.sidebar.header("🔎 Filtros del Analizador")
+
+    analysis_sheets = sorted(gastos["pestana"].unique()) if not gastos.empty else []
+    selected_sheets = st.sidebar.multiselect(
+        "Pestañas",
+        analysis_sheets,
+        default=analysis_sheets,
+    )
+
+    available_months = (
+        sorted(gastos.loc[gastos["pestana"].isin(selected_sheets), "mes"].dropna().unique())
+        if not gastos.empty else []
+    )
+
+    if available_months:
+        min_date = pd.Timestamp(min(available_months))
+        max_date = pd.Timestamp(max(available_months))
+        date_range = st.sidebar.date_input(
+            "Período",
+            value=(min_date.date(), max_date.date()),
         )
-        st.line_chart(monthly.set_index("mes")[["monto"]])
-
-        st.markdown("### 🧩 Segmentos que más explican el cambio")
-        seg = (
-            latest.groupby(["pestana", "vista", "segmento"], as_index=False)
-            .agg(
-                gasto=("monto", "sum"),
-                variacion=("variacion_bs", "sum"),
-                impacto=("variacion_bs", lambda s: s.abs().sum()),
-            )
-            .sort_values("impacto", ascending=False)
-            .head(15)
-        )
-        st.dataframe(
-            fmt(seg, ["gasto", "variacion", "impacto"]),
-            use_container_width=True,
-        )
-
-
-# ============================================================
-# ANÁLISIS POR PESTAÑA
-# ============================================================
-with tab_pestanas:
-    st.subheader("📑 Variación mes a mes por pestaña")
-
-    if not selected_sheets:
-        st.info("Seleccione al menos una pestaña.")
-    else:
-        selected_sheet = st.selectbox("Pestaña", selected_sheets)
-        sheet_data = filtered[filtered["pestana"] == selected_sheet].copy()
-
-        if sheet_data.empty:
-            st.warning("No hay datos para la pestaña seleccionada.")
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            start_date = pd.Timestamp(date_range[0]).to_period("M").to_timestamp()
+            end_date = pd.Timestamp(date_range[1]).to_period("M").to_timestamp()
         else:
-            monthly = (
-                sheet_data.groupby("mes", as_index=False)
-                .agg(
-                    gasto=("monto", "sum"),
-                    variacion=("variacion_bs", "sum"),
-                    registros=("cuenta", "count"),
-                )
-                .sort_values("mes")
-            )
+            start_date = min_date
+            end_date = pd.Timestamp(date_range).to_period("M").to_timestamp()
+    else:
+        start_date = pd.Timestamp("1900-01-01")
+        end_date = pd.Timestamp("2100-01-01")
 
-            st.markdown("### Evolución del gasto")
-            st.line_chart(monthly.set_index("mes")[["gasto"]])
+    filtered = (
+        variations[
+            variations["pestana"].isin(selected_sheets)
+            & variations["mes"].between(start_date, end_date)
+        ].copy()
+        if not variations.empty else pd.DataFrame()
+    )
 
-            st.markdown("### Resumen mensual")
-            st.dataframe(
-                fmt(monthly, ["gasto", "variacion"]),
-                use_container_width=True,
-            )
+    # Tabs
+    tab_dashboard, tab_pestanas, tab_ranking, tab_detalle, tab_diag = st.tabs(
+        [
+            "🏠 Dashboard",
+            "📑 Pestañas",
+            "🚨 Ranking de variaciones",
+            "🔍 Detalle / causas",
+            "🛠 Diagnóstico",
+        ]
+    )
 
-            segments = sorted(sheet_data["segmento"].dropna().astype(str).unique())
-            selected_segment = st.selectbox(
-                "Segmento / grupo",
-                ["TODOS"] + segments,
-            )
+    # Dashboard
+    with tab_dashboard:
+        st.subheader("Resumen ejecutivo")
 
-            entity = (
-                sheet_data
-                if selected_segment == "TODOS"
-                else sheet_data[sheet_data["segmento"].astype(str) == selected_segment]
-            ).copy()
+        if filtered.empty:
+            st.warning("No hay datos en el período o filtros seleccionados.")
+        else:
+            latest_month = filtered["mes"].max()
+            latest = filtered[filtered["mes"] == latest_month].copy()
 
-            accounts = sorted(entity["cuenta"].dropna().astype(str).unique())
-            selected_account = "TODAS"
-            if len(accounts) > 1:
-                selected_account = st.selectbox(
-                    "Cuenta específica",
-                    ["TODAS"] + accounts,
-                )
+            critical = (latest["nivel_alerta"] == "🔴 CRÍTICA").sum()
+            important = (latest["nivel_alerta"] == "🟠 IMPORTANTE").sum()
+            total_latest = latest["monto"].sum()
+            total_delta = latest["variacion_bs"].sum()
 
-            if selected_account != "TODAS":
-                entity = entity[entity["cuenta"].astype(str) == selected_account].copy()
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Último mes", latest_month.strftime("%Y-%m"))
+            c2.metric("Gasto analizado", f"{total_latest:,.2f}")
+            c3.metric("Variación neta", f"{total_delta:,.2f}")
+            c4.metric("Alertas críticas", f"{critical:,}")
+            c5.metric("Alertas importantes", f"{important:,}")
 
-            st.markdown("### Tendencia seleccionada")
-            trend = entity.groupby("mes")["monto"].sum().sort_index()
-            st.line_chart(trend)
-
-            detail_cols = [
-                "mes", "vista", "segmento", "cuenta", "nivel",
-                "monto", "mes_anterior", "variacion_bs", "variacion_pct",
-                "promedio_3m", "promedio_6m", "z_score",
-                "nivel_alerta", "direccion",
+            st.markdown("### 🔥 Top 20 variaciones que merecen revisión")
+            top20 = latest.sort_values("impacto_abs", ascending=False).head(20).copy()
+            dashboard_cols = [
+                "nivel_alerta", "pestana", "empresa", "vista", "segmento",
+                "cuenta", "mes", "monto", "mes_anterior", "variacion_bs",
+                "variacion_pct", "peso_en_total_pct",
+                "participacion_variacion_pct", "direccion",
             ]
+            dashboard_cols = [c for c in dashboard_cols if c in top20.columns]
             st.dataframe(
                 fmt(
-                    entity[[c for c in detail_cols if c in entity.columns]],
+                    top20[dashboard_cols],
                     [
                         "monto", "mes_anterior", "variacion_bs", "variacion_pct",
-                        "promedio_3m", "promedio_6m", "z_score",
+                        "peso_en_total_pct", "participacion_variacion_pct",
                     ],
                 ),
                 use_container_width=True,
                 height=560,
             )
 
+            st.markdown("### 📈 Evolución del gasto total")
+            monthly = (
+                filtered.groupby("mes", as_index=False)["monto"]
+                .sum()
+                .sort_values("mes")
+            )
+            st.line_chart(monthly.set_index("mes")[["monto"]])
 
-# ============================================================
-# RANKING DE VARIACIONES
-# ============================================================
-with tab_ranking:
-    st.subheader("🚨 Ranking de variaciones importantes")
+            st.markdown("### 🧩 Segmentos que más explican el cambio")
+            seg = (
+                latest.groupby(["pestana", "vista", "segmento"], as_index=False)
+                .agg(
+                    gasto=("monto", "sum"),
+                    variacion=("variacion_bs", "sum"),
+                    impacto=("variacion_bs", lambda s: s.abs().sum()),
+                )
+                .sort_values("impacto", ascending=False)
+                .head(15)
+            )
+            st.dataframe(
+                fmt(seg, ["gasto", "variacion", "impacto"]),
+                use_container_width=True,
+            )
 
-    if filtered.empty:
-        st.info("No existen variaciones para los filtros seleccionados.")
-    else:
-        ranking = filtered[
-            filtered["nivel_alerta"].isin(["🔴 CRÍTICA", "🟠 IMPORTANTE"])
-        ].copy()
+    # Análisis por Pestaña
+    with tab_pestanas:
+        st.subheader("📑 Variación mes a mes por pestaña")
 
-        direction = st.multiselect(
-            "Tipo de movimiento",
-            ["AUMENTO", "DISMINUCIÓN", "CAMBIO DE SIGNO"],
-            default=["AUMENTO", "DISMINUCIÓN", "CAMBIO DE SIGNO"],
-        )
-        if direction:
-            ranking = ranking[ranking["direccion"].isin(direction)]
-
-        sort_choice = st.radio(
-            "Ordenar por",
-            [
-                "Impacto económico",
-                "Variación %",
-                "Z-score",
-                "Participación del cambio",
-            ],
-            horizontal=True,
-        )
-        sort_map = {
-            "Impacto económico": "impacto_abs",
-            "Variación %": "variacion_pct",
-            "Z-score": "z_score",
-            "Participación del cambio": "participacion_variacion_pct",
-        }
-        sort_col = sort_map[sort_choice]
-        ranking = ranking.sort_values(
-            sort_col,
-            key=lambda s: s.abs(),
-            ascending=False,
-        )
-
-        ranking_cols = [
-            "nivel_alerta", "mes", "pestana", "empresa", "vista",
-            "segmento", "cuenta", "monto", "mes_anterior", "variacion_bs",
-            "variacion_pct", "promedio_3m", "promedio_6m", "z_score",
-            "peso_en_total_pct", "participacion_variacion_pct",
-            "direccion", "cambio_signo", "nuevo_saldo",
-        ]
-        st.dataframe(
-            fmt(
-                ranking[[c for c in ranking_cols if c in ranking.columns]],
-                [
-                    "monto", "mes_anterior", "variacion_bs", "variacion_pct",
-                    "promedio_3m", "promedio_6m", "z_score",
-                    "peso_en_total_pct", "participacion_variacion_pct",
-                ],
-            ),
-            use_container_width=True,
-            height=650,
-        )
-
-
-# ============================================================
-# DETALLE / CAUSAS
-# ============================================================
-with tab_detalle:
-    st.subheader("🔍 Desde la alerta hasta la transacción")
-
-    if detail is None or not detail_status.get("valido", False):
-        st.warning(
-            "No se pudo preparar la hoja Detalle. "
-            "El análisis mensual seguirá funcionando, pero no el nivel transaccional."
-        )
-        st.write(detail_status)
-    elif filtered.empty:
-        st.info("No existen registros para los filtros actuales.")
-    else:
-        alerts = filtered[
-            filtered["nivel_alerta"].isin(["🔴 CRÍTICA", "🟠 IMPORTANTE"])
-        ].copy().reset_index(drop=True)
-
-        if alerts.empty:
-            st.success("No hay alertas importantes en el período seleccionado.")
+        if not selected_sheets:
+            st.info("Seleccione al menos una pestaña.")
         else:
-            def label_alert(i):
-                r = alerts.iloc[i]
-                pct = f"{r['variacion_pct']:,.2f}%" if not pd.isna(r['variacion_pct']) else "N/D"
-                return (
-                    f"{r['nivel_alerta']} | {r['pestana']} | {r['segmento']} | "
-                    f"{r['cuenta']} | {pd.Timestamp(r['mes']).strftime('%Y-%m')} | "
-                    f"Δ {r['variacion_bs']:,.2f} | {pct}"
-                )
+            selected_sheet = st.selectbox("Pestaña", selected_sheets)
+            sheet_data = filtered[filtered["pestana"] == selected_sheet].copy()
 
-            selected_idx = st.selectbox(
-                "Seleccione una alerta",
-                range(len(alerts)),
-                format_func=label_alert,
-            )
-            alert = alerts.iloc[selected_idx]
-
-            k1, k2, k3, k4, k5 = st.columns(5)
-            k1.metric("Saldo actual", f"{alert['monto']:,.2f}")
-            k2.metric("Mes anterior", f"{alert['mes_anterior']:,.2f}")
-            k3.metric("Variación", f"{alert['variacion_bs']:,.2f}")
-            k4.metric(
-                "Variación %",
-                f"{alert['variacion_pct']:,.2f}%" if not pd.isna(alert['variacion_pct']) else "N/D",
-            )
-            k5.metric(
-                "Z-score",
-                f"{alert['z_score']:,.2f}" if not pd.isna(alert['z_score']) else "N/D",
-            )
-
-            reasons = []
-            if abs(alert["variacion_bs"]) >= amount_threshold:
-                reasons.append(f"supera el umbral monetario de {amount_threshold:,.2f}")
-            if not pd.isna(alert["variacion_pct"]) and abs(alert["variacion_pct"]) >= pct_threshold:
-                reasons.append(f"la variación porcentual es {abs(alert['variacion_pct']):,.2f}%")
-            if not pd.isna(alert["z_score"]) and abs(alert["z_score"]) >= z_threshold:
-                reasons.append(f"presenta comportamiento atípico (Z-score {abs(alert['z_score']):,.2f})")
-            if alert["cambio_signo"]:
-                reasons.append("existe cambio de signo")
-            if alert["nuevo_saldo"]:
-                reasons.append("es un saldo nuevo respecto del mes anterior")
-
-            st.info(
-                "La alerta se explica por: " + "; ".join(reasons) + "."
-                if reasons
-                else "La fila no supera actualmente los parámetros configurados."
-            )
-
-            detail_rows = detail_matches_alert(alert, detail)
-
-            amount_col = (
-                "USD_S1"
-                if norm(alert["moneda"]) == "usd_s1" and "USD_S1" in detail_rows.columns
-                else "USD"
-            )
-
-            st.markdown("### 🔬 Transacciones que explican la variación")
-
-            if detail_rows.empty:
-                st.warning(
-                    "No se encontraron transacciones con el mismo Empresa + Periodo + Segmento/Cuenta."
-                )
+            if sheet_data.empty:
+                st.warning("No hay datos para la pestaña seleccionada.")
             else:
-                st.metric("Movimientos encontrados", f"{len(detail_rows):,}")
+                monthly = (
+                    sheet_data.groupby("mes", as_index=False)
+                    .agg(
+                        gasto=("monto", "sum"),
+                        variacion=("variacion_bs", "sum"),
+                        registros=("cuenta", "count"),
+                    )
+                    .sort_values("mes")
+                )
 
-                drivers = transaction_driver_table(detail_rows, amount_col)
-                if not drivers.empty:
-                    st.markdown("#### Principales movimientos")
-                    st.dataframe(
-                        fmt(drivers, ["movimientos", "importe", "impacto_abs"]),
-                        use_container_width=True,
-                        height=360,
+                st.markdown("### Evolución del gasto")
+                st.line_chart(monthly.set_index("mes")[["gasto"]])
+
+                st.markdown("### Resumen mensual")
+                st.dataframe(
+                    fmt(monthly, ["gasto", "variacion"]),
+                    use_container_width=True,
+                )
+
+                segments = sorted(sheet_data["segmento"].dropna().astype(str).unique())
+                selected_segment = st.selectbox(
+                    "Segmento / grupo",
+                    ["TODOS"] + segments,
+                )
+
+                entity = (
+                    sheet_data
+                    if selected_segment == "TODOS"
+                    else sheet_data[sheet_data["segmento"].astype(str) == selected_segment]
+                ).copy()
+
+                accounts = sorted(entity["cuenta"].dropna().astype(str).unique())
+                selected_account = "TODAS"
+                if len(accounts) > 1:
+                    selected_account = st.selectbox(
+                        "Cuenta específica",
+                        ["TODAS"] + accounts,
                     )
 
-                st.markdown("#### Transacciones")
-                display_cols = [
-                    c for c in DETALLE_COLS if c in detail_rows.columns
+                if selected_account != "TODAS":
+                    entity = entity[entity["cuenta"].astype(str) == selected_account].copy()
+
+                st.markdown("### Tendencia seleccionada")
+                trend = entity.groupby("mes")["monto"].sum().sort_index()
+                st.line_chart(trend)
+
+                detail_cols = [
+                    "mes", "vista", "segmento", "cuenta", "nivel",
+                    "monto", "mes_anterior", "variacion_bs", "variacion_pct",
+                    "promedio_3m", "promedio_6m", "z_score",
+                    "nivel_alerta", "direccion",
                 ]
                 st.dataframe(
-                    fmt(detail_rows[display_cols], ["USD", "VES", "USD_S1"]),
+                    fmt(
+                        entity[[c for c in detail_cols if c in entity.columns]],
+                        [
+                            "monto", "mes_anterior", "variacion_bs", "variacion_pct",
+                            "promedio_3m", "promedio_6m", "z_score",
+                        ],
+                    ),
                     use_container_width=True,
-                    height=550,
+                    height=560,
                 )
 
+    # Ranking
+    with tab_ranking:
+        st.subheader("🚨 Ranking de variaciones importantes")
 
-# ============================================================
-# DIAGNÓSTICO
-# ============================================================
-with tab_diag:
-    st.subheader("🛠 Diagnóstico del archivo")
-    st.dataframe(diagnostics, use_container_width=True, height=420)
+        if filtered.empty:
+            st.info("No existen variaciones para los filtros seleccionados.")
+        else:
+            ranking = filtered[
+                filtered["nivel_alerta"].isin(["🔴 CRÍTICA", "🟠 IMPORTANTE"])
+            ].copy()
 
-    st.markdown("### Hoja Detalle")
-    st.write(detail_status)
-    if detail is not None and not detail.empty:
-        st.write(f"Registros históricos utilizables: {len(detail):,}")
-        st.write(
-            "Columnas utilizadas:",
-            [c for c in DETALLE_COLS if c in detail.columns],
+            direction = st.multiselect(
+                "Tipo de movimiento",
+                ["AUMENTO", "DISMINUCIÓN", "CAMBIO DE SIGNO"],
+                default=["AUMENTO", "DISMINUCIÓN", "CAMBIO DE SIGNO"],
+            )
+            if direction:
+                ranking = ranking[ranking["direccion"].isin(direction)]
+
+            sort_choice = st.radio(
+                "Ordenar por",
+                [
+                    "Impacto económico",
+                    "Variación %",
+                    "Z-score",
+                    "Participación del cambio",
+                ],
+                horizontal=True,
+            )
+            sort_map = {
+                "Impacto económico": "impacto_abs",
+                "Variación %": "variacion_pct",
+                "Z-score": "z_score",
+                "Participación del cambio": "participacion_variacion_pct",
+            }
+            sort_col = sort_map[sort_choice]
+            ranking = ranking.sort_values(
+                sort_col,
+                key=lambda s: s.abs(),
+                ascending=False,
+            )
+
+            ranking_cols = [
+                "nivel_alerta", "mes", "pestana", "empresa", "vista",
+                "segmento", "cuenta", "monto", "mes_anterior", "variacion_bs",
+                "variacion_pct", "promedio_3m", "promedio_6m", "z_score",
+                "peso_en_total_pct", "participacion_variacion_pct",
+                "direccion", "cambio_signo", "nuevo_saldo",
+            ]
+            st.dataframe(
+                fmt(
+                    ranking[[c for c in ranking_cols if c in ranking.columns]],
+                    [
+                        "monto", "mes_anterior", "variacion_bs", "variacion_pct",
+                        "promedio_3m", "promedio_6m", "z_score",
+                        "peso_en_total_pct", "participacion_variacion_pct",
+                    ],
+                ),
+                use_container_width=True,
+                height=650,
+            )
+
+    # Detalle / Causas
+    with tab_detalle:
+        st.subheader("🔍 Desde la alerta hasta la transacción")
+
+        if detail is None or not detail_status.get("valido", False):
+            st.warning(
+                "No se pudo preparar la hoja Detalle. "
+                "El análisis mensual seguirá funcionando, pero no el nivel transaccional."
+            )
+            st.write(detail_status)
+        elif filtered.empty:
+            st.info("No existen registros para los filtros actuales.")
+        else:
+            alerts = filtered[
+                filtered["nivel_alerta"].isin(["🔴 CRÍTICA", "🟠 IMPORTANTE"])
+            ].copy().reset_index(drop=True)
+
+            if alerts.empty:
+                st.success("No hay alertas importantes en el período seleccionado.")
+            else:
+                def label_alert(i):
+                    r = alerts.iloc[i]
+                    pct = f"{r['variacion_pct']:,.2f}%" if not pd.isna(r['variacion_pct']) else "N/D"
+                    return (
+                        f"{r['nivel_alerta']} | {r['pestana']} | {r['segmento']} | "
+                        f"{r['cuenta']} | {pd.Timestamp(r['mes']).strftime('%Y-%m')} | "
+                        f"Δ {r['variacion_bs']:,.2f} | {pct}"
+                    )
+
+                selected_idx = st.selectbox(
+                    "Seleccione una alerta",
+                    range(len(alerts)),
+                    format_func=label_alert,
+                )
+                alert = alerts.iloc[selected_idx]
+
+                k1, k2, k3, k4, k5 = st.columns(5)
+                k1.metric("Saldo actual", f"{alert['monto']:,.2f}")
+                k2.metric("Mes anterior", f"{alert['mes_anterior']:,.2f}")
+                k3.metric("Variación", f"{alert['variacion_bs']:,.2f}")
+                k4.metric(
+                    "Variación %",
+                    f"{alert['variacion_pct']:,.2f}%" if not pd.isna(alert['variacion_pct']) else "N/D",
+                )
+                k5.metric(
+                    "Z-score",
+                    f"{alert['z_score']:,.2f}" if not pd.isna(alert['z_score']) else "N/D",
+                )
+
+                reasons = []
+                if abs(alert["variacion_bs"]) >= amount_threshold:
+                    reasons.append(f"supera el umbral monetario de {amount_threshold:,.2f}")
+                if not pd.isna(alert["variacion_pct"]) and abs(alert["variacion_pct"]) >= pct_threshold:
+                    reasons.append(f"la variación porcentual es {abs(alert['variacion_pct']):,.2f}%")
+                if not pd.isna(alert["z_score"]) and abs(alert["z_score"]) >= z_threshold:
+                    reasons.append(f"presenta comportamiento atípico (Z-score {abs(alert['z_score']):,.2f})")
+                if alert["cambio_signo"]:
+                    reasons.append("existe cambio de signo")
+                if alert["nuevo_saldo"]:
+                    reasons.append("es un saldo nuevo respecto del mes anterior")
+
+                st.info(
+                    "La alerta se explica por: " + "; ".join(reasons) + "."
+                    if reasons
+                    else "La fila no supera actualmente los parámetros configurados."
+                )
+
+                detail_rows = detail_matches_alert(alert, detail)
+
+                amount_col = (
+                    "USD_S1"
+                    if norm(alert["moneda"]) == "usd_s1" and "USD_S1" in detail_rows.columns
+                    else "USD"
+                )
+
+                st.markdown("### 🔬 Transacciones que explican la variación")
+
+                if detail_rows.empty:
+                    st.warning(
+                        "No se encontraron transacciones con el mismo Empresa + Periodo + Segmento/Cuenta."
+                    )
+                else:
+                    st.metric("Movimientos encontrados", f"{len(detail_rows):,}")
+
+                    drivers = transaction_driver_table(detail_rows, amount_col)
+                    if not drivers.empty:
+                        st.markdown("#### Principales movimientos")
+                        st.dataframe(
+                            fmt(drivers, ["movimientos", "importe", "impacto_abs"]),
+                            use_container_width=True,
+                            height=360,
+                        )
+
+                    st.markdown("#### Transacciones")
+                    display_cols = [
+                        c for c in DETALLE_COLS if c in detail_rows.columns
+                    ]
+                    st.dataframe(
+                        fmt(detail_rows[display_cols], ["USD", "VES", "USD_S1"]),
+                        use_container_width=True,
+                        height=550,
+                    )
+
+    # Diagnóstico
+    with tab_diag:
+        st.subheader("🛠 Diagnóstico del archivo")
+        st.dataframe(diagnostics, use_container_width=True, height=420)
+
+        st.markdown("### Hoja Detalle")
+        st.write(detail_status)
+        if detail is not None and not detail.empty:
+            st.write(f"Registros históricos utilizables: {len(detail):,}")
+            st.write(
+                "Columnas utilizadas:",
+                [c for c in DETALLE_COLS if c in detail.columns],
+            )
+
+    # Exportación
+    st.divider()
+    st.subheader("📥 Exportar análisis")
+
+    if not filtered.empty:
+        export_variations = filtered.copy()
+        export_alerts = filtered[
+            filtered["nivel_alerta"].isin(["🔴 CRÍTICA", "🟠 IMPORTANTE"])
+        ].copy()
+        latest_export = (
+            filtered[filtered["mes"] == filtered["mes"].max()]
+            .sort_values("impacto_abs", ascending=False)
+            .head(20)
         )
 
+        out = io.BytesIO()
+        with pd.ExcelWriter(out, engine="openpyxl") as writer:
+            export_variations.to_excel(writer, sheet_name="Variaciones", index=False)
+            export_alerts.to_excel(writer, sheet_name="Alertas", index=False)
+            latest_export.to_excel(writer, sheet_name="Top20_Ultimo_Mes", index=False)
+            diagnostics.to_excel(writer, sheet_name="Diagnostico", index=False)
 
-# ============================================================
-# EXPORTACIÓN
-# ============================================================
-st.divider()
-st.subheader("📥 Exportar análisis")
+            if detail is not None and not detail.empty and not export_alerts.empty:
+                parts = []
+                for _, alert in export_alerts.head(100).iterrows():
+                    rows = detail_matches_alert(alert, detail)
+                    if not rows.empty:
+                        parts.append(rows)
+                if parts:
+                    pd.concat(parts, ignore_index=True).drop_duplicates().to_excel(
+                        writer,
+                        sheet_name="Detalle_Alertas",
+                        index=False,
+                    )
 
-if not filtered.empty:
-    export_variations = filtered.copy()
-    export_alerts = filtered[
-        filtered["nivel_alerta"].isin(["🔴 CRÍTICA", "🟠 IMPORTANTE"])
-    ].copy()
-    latest_export = (
-        filtered[filtered["mes"] == filtered["mes"].max()]
-        .sort_values("impacto_abs", ascending=False)
-        .head(20)
-    )
+            for ws in writer.book.worksheets:
+                ws.freeze_panes = "A2"
+                ws.auto_filter.ref = ws.dimensions
+                for col in ws.columns:
+                    max_len = 0
+                    letter = col[0].column_letter
+                    for cell in col[:1000]:
+                        try:
+                            max_len = max(max_len, len(str(cell.value)))
+                        except Exception:
+                            pass
+                    ws.column_dimensions[letter].width = min(max(10, max_len + 2), 35)
 
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine="openpyxl") as writer:
-        export_variations.to_excel(writer, sheet_name="Variaciones", index=False)
-        export_alerts.to_excel(writer, sheet_name="Alertas", index=False)
-        latest_export.to_excel(writer, sheet_name="Top20_Ultimo_Mes", index=False)
-        diagnostics.to_excel(writer, sheet_name="Diagnostico", index=False)
-
-        if detail is not None and not detail.empty and not export_alerts.empty:
-            parts = []
-            for _, alert in export_alerts.head(100).iterrows():
-                rows = detail_matches_alert(alert, detail)
-                if not rows.empty:
-                    parts.append(rows)
-            if parts:
-                pd.concat(parts, ignore_index=True).drop_duplicates().to_excel(
-                    writer,
-                    sheet_name="Detalle_Alertas",
-                    index=False,
-                )
-
-        for ws in writer.book.worksheets:
-            ws.freeze_panes = "A2"
-            ws.auto_filter.ref = ws.dimensions
-            for col in ws.columns:
-                max_len = 0
-                letter = col[0].column_letter
-                for cell in col[:1000]:
-                    try:
-                        max_len = max(max_len, len(str(cell.value)))
-                    except Exception:
-                        pass
-                ws.column_dimensions[letter].width = min(max(10, max_len + 2), 35)
-
-    out.seek(0)
-    st.download_button(
-        "📥 Descargar reporte Excel",
-        data=out.getvalue(),
-        file_name=f"Analisis_Variaciones_Gastos_{datetime.now():%Y%m%d_%H%M}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-else:
-    st.info("No hay datos para exportar con los filtros actuales.")
+        out.seek(0)
+        st.download_button(
+            "📥 Descargar reporte Excel",
+            data=out.getvalue(),
+            file_name=f"Analisis_Variaciones_Gastos_{datetime.now():%Y%m%d_%H%M}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    else:
+        st.info("No hay datos para exportar con los filtros actuales.")
