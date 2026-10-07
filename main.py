@@ -35,3 +35,5 @@ if modulo == "📊 Conciliación de Ventas":
     modulo_conciliacion(sucursal)
 elif modulo == "📝 Crear Libro de Ventas SENIAT":
     modulo_crear_libro(sucursal)
+elif modulo == "📊 Analizador de Variaciones de Gastos":
+    modulo_crear_libro(sucursal)
