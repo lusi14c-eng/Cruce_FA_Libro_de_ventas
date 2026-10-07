@@ -1,8 +1,7 @@
 import streamlit as st
 from modules.conciliacion import modulo_conciliacion
 from modules.generador_libro import modulo_crear_libro
-# 1. Importante: Importar el analizador desde su archivo
-from modules.logic_analizador_variaciones_gastos import modulo_analizador_gastos 
+from modules.logic_analizador_variaciones_gastos import modulo_analizador_gastos
 
 st.set_page_config(
     page_title="Sistema de Conciliación y Libros de Ventas",
@@ -20,7 +19,6 @@ sucursal = st.sidebar.selectbox(
 
 st.sidebar.markdown("---")
 
-# Las 3 opciones registradas en el radio button
 modulo = st.sidebar.radio(
     "Selecciona el Módulo:",
     [
@@ -39,5 +37,4 @@ if modulo == "📊 Conciliación de Ventas":
 elif modulo == "📝 Crear Libro de Ventas SENIAT":
     modulo_crear_libro(sucursal)
 elif modulo == "📊 Analizador de Variaciones de Gastos":
-    # 2. Importante: Llamar a la función del analizador de gastos, no a la de crear libro
     modulo_analizador_gastos(sucursal)
