@@ -9,7 +9,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# Sidebar: Selector de Sucursal y Módulo
 st.sidebar.title("🏢 Control Central")
 
 sucursal = st.sidebar.selectbox(
@@ -28,10 +27,8 @@ modulo = st.sidebar.radio(
     ]
 )
 
-# Encabezado dinámico por sucursal
 st.caption(f"📍 Operando en: **{sucursal}**")
 
-# Enrutamiento de pantalla
 if modulo == "📊 Conciliación de Ventas":
     modulo_conciliacion(sucursal)
 elif modulo == "📝 Crear Libro de Ventas SENIAT":
