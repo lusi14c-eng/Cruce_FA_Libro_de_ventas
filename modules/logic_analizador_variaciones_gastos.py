@@ -314,7 +314,7 @@ def prepare_detail(raw):
 
 
 # ============================================================
-# CARGA CACHÉ (CORREGIDA PARA EVITAR OUT-OF-BOUNDS)
+# CARGA Y CÁLCULOS OPTIMIZADOS EN CACHÉ
 # ============================================================
 @st.cache_data(show_spinner=False)
 def read_workbook(file_bytes):
@@ -322,7 +322,6 @@ def read_workbook(file_bytes):
     raw_sheets = {}
 
     for name in xls.sheet_names:
-        # Se elimina el 'usecols' estático para leer dinámicamente las columnas de cada pestaña
         raw_sheets[name] = pd.read_excel(
             xls,
             sheet_name=name,
@@ -332,64 +331,6 @@ def read_workbook(file_bytes):
     return raw_sheets, xls.sheet_names
 
 
-@st.cache_data(show_spinner=False)
-def build_analysis(file_bytes):
-    raw_sheets, sheet_names = read_workbook(file_bytes)
-    all_frames = []
-    diagnostics = []
-
-    for name in sheet_names:
-        if name == "Detalle":
-            continue
-
-        try:
-            parsed = parse_gasto_sheet(raw_sheets[name], name)
-            if parsed is None or parsed.empty:
-                diagnostics.append({
-                    "Pestaña": name,
-                    "Analizada": "No",
-                    "Registros": 0,
-                    "Empresa": "",
-                    "Moneda": "",
-                    "Motivo": "No se detectó estructura mensual",
-                })
-                continue
-
-            all_frames.append(parsed)
-            diagnostics.append({
-                "Pestaña": name,
-                "Analizada": "Sí",
-                "Registros": len(parsed),
-                "Empresa": parsed["empresa"].iloc[0],
-                "Moneda": parsed["moneda"].iloc[0],
-                "Motivo": "",
-            })
-        except Exception as exc:
-            diagnostics.append({
-                "Pestaña": name,
-                "Analizada": "Error",
-                "Registros": 0,
-                "Empresa": "",
-                "Moneda": "",
-                "Motivo": str(exc),
-            })
-
-    gastos = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
-
-    detail = None
-    detail_status = {}
-    if "Detalle" in raw_sheets:
-        try:
-            detail, detail_status = prepare_detail(raw_sheets["Detalle"])
-        except Exception as exc:
-            detail_status = {"valido": False, "motivo": str(exc)}
-
-    return gastos, detail, pd.DataFrame(diagnostics), detail_status
-
-
-# ============================================================
-# HISTÓRICO Y VARIACIONES
-# ============================================================
 def complete_month_history(df):
     if df.empty:
         return df
@@ -517,6 +458,62 @@ def calculate_variations(gastos):
     )
 
     return base
+
+
+@st.cache_data(show_spinner=False)
+def build_analysis(file_bytes):
+    raw_sheets, sheet_names = read_workbook(file_bytes)
+    all_frames = []
+    diagnostics = []
+
+    for name in sheet_names:
+        if name == "Detalle":
+            continue
+
+        try:
+            parsed = parse_gasto_sheet(raw_sheets[name], name)
+            if parsed is None or parsed.empty:
+                diagnostics.append({
+                    "Pestaña": name,
+                    "Analizada": "No",
+                    "Registros": 0,
+                    "Empresa": "",
+                    "Moneda": "",
+                    "Motivo": "No se detectó estructura mensual",
+                })
+                continue
+
+            all_frames.append(parsed)
+            diagnostics.append({
+                "Pestaña": name,
+                "Analizada": "Sí",
+                "Registros": len(parsed),
+                "Empresa": parsed["empresa"].iloc[0],
+                "Moneda": parsed["moneda"].iloc[0],
+                "Motivo": "",
+            })
+        except Exception as exc:
+            diagnostics.append({
+                "Pestaña": name,
+                "Analizada": "Error",
+                "Registros": 0,
+                "Empresa": "",
+                "Moneda": "",
+                "Motivo": str(exc),
+            })
+
+    gastos = pd.concat(all_frames, ignore_index=True) if all_frames else pd.DataFrame()
+    variations = calculate_variations(gastos)
+
+    detail = None
+    detail_status = {}
+    if "Detalle" in raw_sheets:
+        try:
+            detail, detail_status = prepare_detail(raw_sheets["Detalle"])
+        except Exception as exc:
+            detail_status = {"valido": False, "motivo": str(exc)}
+
+    return gastos, variations, detail, pd.DataFrame(diagnostics), detail_status
 
 
 def classify_alert(row, pct_threshold, amount_threshold, z_threshold):
@@ -679,63 +676,83 @@ def modulo_analizador_gastos(sucursal: str):
 
     if uploaded is None:
         st.info("Carga el archivo **Gastos Operativos Mayoreo VE** para comenzar.")
-        with st.expander("Estructura del archivo que espera esta versión"):
+        with st.expander("📖 Instructivo y Estructura del Archivo Requerido"):
             st.markdown(
                 """
-                Esta versión está ajustada al archivo entregado: las pestañas de gastos
-                tienen una fila con **Etiquetas de fila** y meses como `2026-09`,
-                `2026-08`, `2026-07`; la columna A contiene segmentos y, en las
-                pestañas `*_Categoria_Logist`, aparecen cuentas detalladas como
-                `7.1.1.01.1.001-Nómina` debajo de segmentos.
-
-                La hoja **Detalle** utiliza `Empresa`, `Periodo`, `N2`, `Cuenta_Nombre`,
-                `REFERENCIA`, `Asiento`, `CENTRO_COSTO`, `USD`, `VES`, `USD_S1`,
-                `DEPARTAMENTO`, `CONCATENADO`, `N2 2.0` y `nombre` para llegar desde
-                una alerta hasta las transacciones que la explican.
+                ### 🚀 Flujo de Trabajo e Importancia de los Parámetros
+                
+                1. **Carga el Archivo:** El sistema procesará en memoria todas las pestañas mensuales y la hoja transaccional `Detalle`.
+                2. **Ajusta los Parámetros:** Una vez cargado el archivo, ajusta los límites monetarios y porcentuales según la escala del análisis que necesites realizar.
+                
+                ---
+                
+                ### 🎯 Importancia de Calibrar los Parámetros
+                
+                * **Variación % para alertar:** Evita que cuentas pequeñas con variaciones porcentuales enormes (ej. pasar de \$10 a \$30 es un 200%) distorsionen la atención si el impacto en dinero es irrelevante.
+                * **Variación mínima (Moneda local / USD):** Establece el "ruido de fondo". Ignora variaciones menores que forman parte de la operación cotidiana y enfoca los recursos en desvíos relevantes.
+                * **Z-score atípico:** Evalúa qué tan inusual es un gasto respecto a su propio comportamiento histórico de los últimos 6 meses. Un Z-score mayor a 2.0 señala anomalías estadísticas reales.
+                * **Excluir Ingresos y Merma:** Permite aislar únicamente los rubros estrictos de gastos operativos descartando ajustes contables.
                 """
             )
         st.stop()
 
     file_bytes = uploaded.getvalue()
 
-    with st.spinner("Leyendo y estructurando el archivo..."):
+    with st.spinner("Procesando y calculando estructura histórica en memoria..."):
         try:
-            raw_sheets, sheet_names = read_workbook(file_bytes)
-            gastos, detail, diagnostics, detail_status = build_analysis(file_bytes)
+            gastos, variations, detail, diagnostics, detail_status = build_analysis(file_bytes)
         except Exception as exc:
             st.error(f"No fue posible procesar el archivo: {exc}")
             st.stop()
 
-    # Parámetros en barra lateral
-    st.sidebar.header("⚙️ Parámetros del Analizador")
+    # ============================================================
+    # PARÁMETROS EN PANTALLA PRINCIPAL
+    # ============================================================
+    with st.expander("⚙️ Parámetros del Analizador de Alertas", expanded=True):
+        st.markdown(
+            "Ajuste los umbrales a continuación para calibrar la sensibilidad del motor de alertas "
+            "en tiempo real sobre el archivo cargado:"
+        )
+        col1, col2, col3, col4 = st.columns(4)
 
-    pct_threshold = st.sidebar.number_input(
-        "Variación % para alertar",
-        min_value=1.0,
-        max_value=500.0,
-        value=30.0,
-        step=5.0,
-    )
-    amount_threshold = st.sidebar.number_input(
-        "Variación mínima (moneda de la pestaña)",
-        min_value=0.0,
-        value=10000.0,
-        step=5000.0,
-    )
-    z_threshold = st.sidebar.number_input(
-        "Z-score atípico",
-        min_value=1.0,
-        max_value=8.0,
-        value=2.0,
-        step=0.5,
-    )
-    exclude_nonexpense = st.sidebar.checkbox(
-        "Excluir Ingresos y Merma",
-        value=False,
-    )
+        with col1:
+            pct_threshold = st.number_input(
+                "Variación % para alertar",
+                min_value=1.0,
+                max_value=500.0,
+                value=30.0,
+                step=5.0,
+                help="Porcentaje mínimo de incremento/disminución para marcar alerta.",
+            )
 
-    variations = calculate_variations(gastos)
+        with col2:
+            amount_threshold = st.number_input(
+                "Variación mínima ($/Bs)",
+                min_value=0.0,
+                value=5000.0,
+                step=1000.0,
+                help="Monto mínimo absoluto de la variación para ser considerada.",
+            )
 
+        with col3:
+            z_threshold = st.number_input(
+                "Z-score atípico",
+                min_value=1.0,
+                max_value=8.0,
+                value=2.0,
+                step=0.5,
+                help="Desviación estándar sobre la media histórica de los últimos 6 meses.",
+            )
+
+        with col4:
+            st.write("")
+            st.write("")
+            exclude_nonexpense = st.checkbox(
+                "Excluir Ingresos y Merma",
+                value=False,
+            )
+
+    # Filtrado según parámetros configurados
     if exclude_nonexpense and not variations.empty:
         keep = ~variations["cuenta"].map(norm).str.contains(
             r"ingresos|merma", regex=True, na=False
@@ -749,9 +766,8 @@ def modulo_analizador_gastos(sucursal: str):
         z_threshold,
     )
 
-    # Filtros
-    st.sidebar.divider()
-    st.sidebar.header("🔎 Filtros del Analizador")
+    # Filtros secundarios en barra lateral
+    st.sidebar.header("🔎 Filtros de Visualización")
 
     analysis_sheets = sorted(gastos["pestana"].unique()) if not gastos.empty else []
     selected_sheets = st.sidebar.multiselect(
@@ -790,7 +806,7 @@ def modulo_analizador_gastos(sucursal: str):
         if not variations.empty else pd.DataFrame()
     )
 
-    # Tabs
+    # Tabs principales
     tab_dashboard, tab_pestanas, tab_ranking, tab_detalle, tab_diag = st.tabs(
         [
             "🏠 Dashboard",
