@@ -314,7 +314,7 @@ def prepare_detail(raw):
 
 
 # ============================================================
-# CARGA CACHÉ
+# CARGA CACHÉ (CORREGIDA PARA EVITAR OUT-OF-BOUNDS)
 # ============================================================
 @st.cache_data(show_spinner=False)
 def read_workbook(file_bytes):
@@ -322,11 +322,11 @@ def read_workbook(file_bytes):
     raw_sheets = {}
 
     for name in xls.sheet_names:
+        # Se elimina el 'usecols' estático para leer dinámicamente las columnas de cada pestaña
         raw_sheets[name] = pd.read_excel(
             xls,
             sheet_name=name,
             header=None,
-            usecols="A:P" if name == "Detalle" else "A:V",
         )
 
     return raw_sheets, xls.sheet_names
