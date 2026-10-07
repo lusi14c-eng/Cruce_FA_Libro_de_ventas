@@ -23,7 +23,7 @@ modulo = st.sidebar.radio(
     [
         "📊 Conciliación de Ventas",
         "📝 Crear Libro de Ventas SENIAT",
-        "📊 Analizador de Variaciones de Gastos"
+        "📈 Analizador de Variaciones de Gastos"
     ]
 )
 
@@ -33,5 +33,5 @@ if modulo == "📊 Conciliación de Ventas":
     modulo_conciliacion(sucursal)
 elif modulo == "📝 Crear Libro de Ventas SENIAT":
     modulo_crear_libro(sucursal)
-elif modulo == "📊 Analizador de Variaciones de Gastos":
+elif modulo == "📈 Analizador de Variaciones de Gastos":
     modulo_analizador_gastos(sucursal)
